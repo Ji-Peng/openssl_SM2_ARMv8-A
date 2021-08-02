@@ -35,6 +35,8 @@
 typedef struct ec_method_st EC_METHOD;
 #endif
 
+const EC_METHOD *EC_GFp_sm2_method(void);
+
 /*
  * Structure details are not part of the exported interface, so all this may
  * change in future versions.

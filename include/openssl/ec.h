@@ -429,6 +429,9 @@ int EC_GROUP_cmp(const EC_GROUP *a, const EC_GROUP *b, BN_CTX *ctx);
  */
 EC_GROUP *EC_GROUP_new_curve_GFp(const BIGNUM *p, const BIGNUM *a,
                                  const BIGNUM *b, BN_CTX *ctx);
+
+EC_GROUP *EC_GROUP_new_curve_sm2_GFp(const BIGNUM *p, const BIGNUM *a,
+                                 const BIGNUM *b, BN_CTX *ctx);
 #  ifndef OPENSSL_NO_EC2M
 /** Creates a new EC_GROUP object with the specified parameters defined
  *  over GF2m (defined by the equation y^2 + x*y = x^3 + a*x^2 + b)

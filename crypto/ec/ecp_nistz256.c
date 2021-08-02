@@ -277,34 +277,40 @@ static void ecp_nistz256_point_double(P256_POINT *r, const P256_POINT *a)
     BN_ULONG *res_x = r->X;
     BN_ULONG *res_y = r->Y;
     BN_ULONG *res_z = r->Z;
-
+    // S=2Y
     ecp_nistz256_mul_by_2(S, in_y);
-
+    // Zsqr=Z^2
     ecp_nistz256_sqr_mont(Zsqr, in_z);
-
+    // S=4Y^2
     ecp_nistz256_sqr_mont(S, S);
-
+    // resZ=2*Y*Z
     ecp_nistz256_mul_mont(res_z, in_z, in_y);
     ecp_nistz256_mul_by_2(res_z, res_z);
-
+    // M=X+Z^2
     ecp_nistz256_add(M, in_x, Zsqr);
+    // Zsqr=X-Z^2
     ecp_nistz256_sub(Zsqr, in_x, Zsqr);
-
+    // resY=S^2
     ecp_nistz256_sqr_mont(res_y, S);
+    // resY=S^2/2=8Y^4
     ecp_nistz256_div_by_2(res_y, res_y);
-
+    // M=(X+Z^2)*(X-Z^2)=X^2-Z^4
     ecp_nistz256_mul_mont(M, M, Zsqr);
+    // M=3*(X^2-Z^4)
     ecp_nistz256_mul_by_3(M, M);
-
+    // S=4XY^2
     ecp_nistz256_mul_mont(S, S, in_x);
+    // tmp0=8XY^2
     ecp_nistz256_mul_by_2(tmp0, S);
-
+    // resX=M^2=(3*(X+Z^2)*(X-Z^2))^2=9*(X^2-Z^4)^2
     ecp_nistz256_sqr_mont(res_x, M);
-
+    // resX=9*(X^2-Z^4)^2-2S
     ecp_nistz256_sub(res_x, res_x, tmp0);
+    // S=S-resX
     ecp_nistz256_sub(S, S, res_x);
-
+    // S=S*M
     ecp_nistz256_mul_mont(S, S, M);
+    // resY=S-8Y^4
     ecp_nistz256_sub(res_y, S, res_y);
 }
 
@@ -408,22 +414,22 @@ static void ecp_nistz256_point_add(P256_POINT *r,
     }
 
     ecp_nistz256_sqr_mont(Rsqr, R);             /* R^2 */
-    ecp_nistz256_mul_mont(res_z, H, in1_z);     /* Z3 = H*Z1*Z2 */
+    ecp_nistz256_mul_mont(res_z, H, in1_z);     /* Z3 = H*Z2 */
     ecp_nistz256_sqr_mont(Hsqr, H);             /* H^2 */
     ecp_nistz256_mul_mont(res_z, res_z, in2_z); /* Z3 = H*Z1*Z2 */
     ecp_nistz256_mul_mont(Hcub, Hsqr, H);       /* H^3 */
 
-    ecp_nistz256_mul_mont(U2, U1, Hsqr);        /* U1*H^2 */
-    ecp_nistz256_mul_by_2(Hsqr, U2);            /* 2*U1*H^2 */
+    ecp_nistz256_mul_mont(U2, U1, Hsqr);        /* U2 = U1*H^2 */
+    ecp_nistz256_mul_by_2(Hsqr, U2);            /* Hsqr = 2*U1*H^2 */
 
-    ecp_nistz256_sub(res_x, Rsqr, Hsqr);
-    ecp_nistz256_sub(res_x, res_x, Hcub);
+    ecp_nistz256_sub(res_x, Rsqr, Hsqr);        /* X3 = R^2-2*U1*H^2 */
+    ecp_nistz256_sub(res_x, res_x, Hcub);       /* X3 = R^2-2*U1*H^2-H^3=R^2-(U1+U2)*H^2 */
 
-    ecp_nistz256_sub(res_y, U2, res_x);
+    ecp_nistz256_sub(res_y, U2, res_x);         /* Y3 = U1*H^2-X3 */
 
-    ecp_nistz256_mul_mont(S2, S1, Hcub);
-    ecp_nistz256_mul_mont(res_y, R, res_y);
-    ecp_nistz256_sub(res_y, res_y, S2);
+    ecp_nistz256_mul_mont(S2, S1, Hcub);        /* S2 = S1*P^3 */
+    ecp_nistz256_mul_mont(res_y, R, res_y);     /* Y3 = R*Y3 */
+    ecp_nistz256_sub(res_y, res_y, S2);         /* Y3 = R*(U1*P^2-X3)-S1*P^3 */
 
     copy_conditional(res_x, in2_x, in1infty);
     copy_conditional(res_y, in2_y, in1infty);

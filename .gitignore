@@ -184,8 +184,9 @@ providers/common/include/prov/der_sm2.h
 # Auto generated assembly language source files
 *.s
 !/crypto/*/asm/*.s
+!/crypto/ec/ecp_sm2-armv8.S
 /crypto/arm*.S
-/crypto/*/*.S
+# /crypto/*/*.S
 *.asm
 !/crypto/*/asm/*.asm
 
@@ -236,3 +237,7 @@ MAKE0[0-9][0-9][0-9].@@@
 # Windows manifest files
 *.manifest
 doc-nits
+
+make_output.txt
+c_cpp_properties.json
+settings.json
