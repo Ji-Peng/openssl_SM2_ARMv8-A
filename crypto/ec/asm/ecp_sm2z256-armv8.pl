@@ -95,7 +95,7 @@ $code.=<<___;
 .LordK: // LordK = low 64bits of order_inv, where order_inv * order = -1 mod 2^256
 .quad	0x327f9e8872350975
 
-.asciz	"ECP_SM2 for ARMv8"
+.asciz	"ECP_SM2Z256 for ARMv8"
 
 // void	ecp_sm2z256_to_mont(BN_ULONG x0[4],const BN_ULONG x1[4]);
 .globl	ecp_sm2z256_to_mont
@@ -356,18 +356,18 @@ ecp_sm2z256_neg:
 .type	__ecp_sm2z256_mul_mont,%function
 .align	4
 __ecp_sm2z256_mul_mont:
-	mul	$acc0,$a0,$bi		// $t0||$acc0 = a[0]*b[0]
+	mul		$acc0,$a0,$bi		// $t0||$acc0 = a[0]*b[0]
 	umulh	$t0,$a0,$bi
 
-	mul	$acc1,$a1,$bi		// $t1||$acc1 = a[1]*b[0]
+	mul		$acc1,$a1,$bi		// $t1||$acc1 = a[1]*b[0]
 	umulh	$t1,$a1,$bi
 
-	mul	$acc2,$a2,$bi		// $t2||$acc2 = a[2]*b[0]
+	mul		$acc2,$a2,$bi		// $t2||$acc2 = a[2]*b[0]
 	umulh	$t2,$a2,$bi
 
-	mul	$acc3,$a3,$bi		// $t3||$acc3 = a[3]*b[0]
+	mul		$acc3,$a3,$bi		// $t3||$acc3 = a[3]*b[0]
 	umulh	$t3,$a3,$bi
-	ldr	$bi,[$bp,#8]		// b[1]
+	ldr		$bi,[$bp,#8]		// b[1]
 
 	// {$acc5,$acc4,$acc3,$acc2,$acc1,$acc0}=a[3-0]*b0
 	adds	$acc1,$acc1,$t0
@@ -754,74 +754,74 @@ ecp_sm2z256_point_double:
 	sub	sp,sp,#32*4
 
 .Ldouble_shortcut:
-	ldp	$acc0,$acc1,[$ap,#32]
+	ldp		$acc0,$acc1,[$ap,#32]
 	 mov	$rp_real,$rp
-	ldp	$acc2,$acc3,[$ap,#48]
+	ldp		$acc2,$acc3,[$ap,#48]
 	 mov	$ap_real,$ap
 	 ldr	$poly1,.Lpoly+8
-	mov	$t0,$acc0
+	mov		$t0,$acc0
 	 ldr	$poly3,.Lpoly+24
-	mov	$t1,$acc1
+	mov		$t1,$acc1
 	 ldp	$a0,$a1,[$ap_real,#64]	// forward load for p256_sqr_mont
-	mov	$t2,$acc2
-	mov	$t3,$acc3
+	mov		$t2,$acc2
+	mov		$t3,$acc3
 	 ldp	$a2,$a3,[$ap_real,#64+16]
-	add	$rp,sp,#$S
-	bl	__ecp_sm2z256_add	// p256_mul_by_2(S, in_y);
+	add		$rp,sp,#$S
+	bl		__ecp_sm2z256_add	// p256_mul_by_2(S, in_y);
 
-	add	$rp,sp,#$Zsqr
-	bl	__ecp_sm2z256_sqr_mont	// p256_sqr_mont(Zsqr, in_z);
+	add		$rp,sp,#$Zsqr
+	bl		__ecp_sm2z256_sqr_mont	// p256_sqr_mont(Zsqr, in_z);
 
-	ldp	$t0,$t1,[$ap_real]
-	ldp	$t2,$t3,[$ap_real,#16]
-	mov	$a0,$acc0		// put Zsqr aside for p256_sub
-	mov	$a1,$acc1
-	mov	$a2,$acc2
-	mov	$a3,$acc3
-	add	$rp,sp,#$M
-	bl	__ecp_sm2z256_add	// p256_add(M, Zsqr, in_x);
+	ldp		$t0,$t1,[$ap_real]
+	ldp		$t2,$t3,[$ap_real,#16]
+	mov		$a0,$acc0		// put Zsqr aside for p256_sub
+	mov		$a1,$acc1
+	mov		$a2,$acc2
+	mov		$a3,$acc3
+	add		$rp,sp,#$M
+	bl		__ecp_sm2z256_add	// p256_add(M, Zsqr, in_x);
 
-	add	$bp,$ap_real,#0
-	mov	$acc0,$a0		// restore Zsqr
-	mov	$acc1,$a1
+	add		$bp,$ap_real,#0
+	mov		$acc0,$a0		// restore Zsqr
+	mov		$acc1,$a1
 	 ldp	$a0,$a1,[sp,#$S]	// forward load for p256_sqr_mont
-	mov	$acc2,$a2
-	mov	$acc3,$a3
+	mov		$acc2,$a2
+	mov		$acc3,$a3
 	 ldp	$a2,$a3,[sp,#$S+16]
-	add	$rp,sp,#$Zsqr
-	bl	__ecp_sm2z256_sub_morf	// p256_sub(Zsqr, in_x, Zsqr);
+	add		$rp,sp,#$Zsqr
+	bl		__ecp_sm2z256_sub_morf	// p256_sub(Zsqr, in_x, Zsqr);
 
-	add	$rp,sp,#$S
-	bl	__ecp_sm2z256_sqr_mont	// p256_sqr_mont(S, S);
+	add		$rp,sp,#$S
+	bl		__ecp_sm2z256_sqr_mont	// p256_sqr_mont(S, S);
 
-	ldr	$bi,[$ap_real,#32]
-	ldp	$a0,$a1,[$ap_real,#64]
-	ldp	$a2,$a3,[$ap_real,#64+16]
-	add	$bp,$ap_real,#32
-	add	$rp,sp,#$tmp0
-	bl	__ecp_sm2z256_mul_mont	// p256_mul_mont(tmp0, in_z, in_y);
+	ldr		$bi,[$ap_real,#32]
+	ldp		$a0,$a1,[$ap_real,#64]
+	ldp		$a2,$a3,[$ap_real,#64+16]
+	add		$bp,$ap_real,#32
+	add		$rp,sp,#$tmp0
+	bl		__ecp_sm2z256_mul_mont	// p256_mul_mont(tmp0, in_z, in_y);
 
-	mov	$t0,$acc0
-	mov	$t1,$acc1
+	mov		$t0,$acc0
+	mov		$t1,$acc1
 	 ldp	$a0,$a1,[sp,#$S]	// forward load for p256_sqr_mont
-	mov	$t2,$acc2
-	mov	$t3,$acc3
+	mov		$t2,$acc2
+	mov		$t3,$acc3
 	 ldp	$a2,$a3,[sp,#$S+16]
-	add	$rp,$rp_real,#64
-	bl	__ecp_sm2z256_add	// p256_mul_by_2(res_z, tmp0);
+	add		$rp,$rp_real,#64
+	bl		__ecp_sm2z256_add	// p256_mul_by_2(res_z, tmp0);
 
-	add	$rp,sp,#$tmp0
-	bl	__ecp_sm2z256_sqr_mont	// p256_sqr_mont(tmp0, S);
+	add		$rp,sp,#$tmp0
+	bl		__ecp_sm2z256_sqr_mont	// p256_sqr_mont(tmp0, S);
 
 	 ldr	$bi,[sp,#$Zsqr]		// forward load for p256_mul_mont
 	 ldp	$a0,$a1,[sp,#$M]
 	 ldp	$a2,$a3,[sp,#$M+16]
-	add	$rp,$rp_real,#32
-	bl	__ecp_sm2z256_div_by_2	// p256_div_by_2(res_y, tmp0);
+	add		$rp,$rp_real,#32
+	bl		__ecp_sm2z256_div_by_2	// p256_div_by_2(res_y, tmp0);
 
-	add	$bp,sp,#$Zsqr
-	add	$rp,sp,#$M
-	bl	__ecp_sm2z256_mul_mont	// p256_mul_mont(M, M, Zsqr);
+	add		$bp,sp,#$Zsqr
+	add		$rp,sp,#$M
+	bl		__ecp_sm2z256_mul_mont	// p256_mul_mont(M, M, Zsqr);
 
 	mov	$t0,$acc0		// duplicate M
 	mov	$t1,$acc1
