@@ -637,6 +637,7 @@ __owur static int ecp_nistz256_windowed_mul(const EC_GROUP *group,
     P256_POINT (*table)[16] = NULL;
     void *table_storage = NULL;
 
+    // malloc memory for table, p_str, scalars
     if ((num * 16 + 6) > OPENSSL_MALLOC_MAX_NELEMS(P256_POINT)
         || (table_storage =
             OPENSSL_malloc((num * 16 + 5) * sizeof(P256_POINT) + 64)) == NULL
@@ -955,6 +956,7 @@ __owur static int ecp_nistz256_set_from_affine(EC_POINT *out, const EC_GROUP *gr
 }
 
 /* r = scalar*G + sum(scalars[i]*points[i]) */
+/* num=0, points=NULL, scalars=NULL when computing scalar*G */
 __owur static int ecp_nistz256_points_mul(const EC_GROUP *group,
                                           EC_POINT *r,
                                           const BIGNUM *scalar,
@@ -964,6 +966,7 @@ __owur static int ecp_nistz256_points_mul(const EC_GROUP *group,
 {
     int i = 0, ret = 0, no_precomp_for_generator = 0, p_is_infinity = 0;
     unsigned char p_str[33] = { 0 };
+    // one row includes 64 points
     const PRECOMP256_ROW *preComputedTable = NULL;
     const NISTZ256_PRE_COMP *pre_comp = NULL;
     const EC_POINT *generator = NULL;
@@ -971,6 +974,7 @@ __owur static int ecp_nistz256_points_mul(const EC_GROUP *group,
     const EC_POINT **new_points = NULL;
     unsigned int idx = 0;
     const unsigned int window_size = 7;
+    // 2^8 - 1
     const unsigned int mask = (1 << (window_size + 1)) - 1;
     unsigned int wvalue;
     ALIGN32 union {
@@ -987,6 +991,7 @@ __owur static int ecp_nistz256_points_mul(const EC_GROUP *group,
     BN_CTX_start(ctx);
 
     if (scalar) {
+        // get base point
         generator = EC_GROUP_get0_generator(group);
         if (generator == NULL) {
             ERR_raise(ERR_LIB_EC, EC_R_UNDEFINED_GENERATOR);

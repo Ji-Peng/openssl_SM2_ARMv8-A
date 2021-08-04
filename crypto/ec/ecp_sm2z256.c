@@ -1512,7 +1512,7 @@ const EC_METHOD *EC_GFp_sm2z256_method(void)
         ossl_ecdsa_simple_sign_setup,
         ossl_ecdsa_simple_sign_sig,
         ossl_ecdsa_simple_verify_sig,
-        ecp_sm2z256_inv_mod_ord,                   /* can be #define-d NULL */
+        0,                   /* can be #define-d NULL */
         0,                                          /* blind_coordinates */
         0,                                          /* ladder_pre */
         0,                                          /* ladder_step */

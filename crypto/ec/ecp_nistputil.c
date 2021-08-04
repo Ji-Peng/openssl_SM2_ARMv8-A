@@ -209,15 +209,18 @@ ossl_ec_GFp_nistp_points_make_affine_internal(size_t num, void *point_array,
  * to compute the least significant recoded digit, given that there's no bit
  * b_-1, has to be b_4 b_3 b_2 b_1 b_0 0.
  *
+ * in=b5 b4 b3 b2 b1 b0
  */
 void ossl_ec_GFp_nistp_recode_scalar_bits(unsigned char *sign,
                                           unsigned char *digit, unsigned char in)
 {
     unsigned char s, d;
-
+    // s=~(b5-1) if b5=1 s=0xff..ff; else (b5=0) s=0
     s = ~((in >> 5) - 1);       /* sets all bits to MSB(in), 'in' seen as
                                  * 6-bit value */
+    // d=111111-in
     d = (1 << 6) - in - 1;
+    // b5=1: d=63-in; b5=0: d=in
     d = (d & s) | (in & ~s);
     d = (d >> 1) + (d & 1);
 
