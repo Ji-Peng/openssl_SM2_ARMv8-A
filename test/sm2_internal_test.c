@@ -15,7 +15,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <math.h>
+#include <signal.h>
+// #include "apps.h"
+// #include "progs.h"
+# include <unistd.h>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <openssl/bn.h>
@@ -28,12 +32,61 @@
 
 # include "crypto/sm2.h"
 
+
 static fake_random_generate_cb get_faked_bytes;
 
 static OSSL_PROVIDER *fake_rand = NULL;
 static uint8_t *fake_rand_bytes = NULL;
 static size_t fake_rand_bytes_offset = 0;
 static size_t fake_rand_size = 0;
+
+// copy frm aarch64-linux-gnu/bits/signum-generic.h
+#define	SIGALRM		14	/* Alarm clock.  */
+
+// copy from apps/speed.c
+static volatile int run = 0;
+static int usertime = 1;
+#define START   0
+#define STOP    1
+
+static double Time_F(int s);
+
+# include <sys/times.h>
+# define TM_START        0
+# define TM_STOP         1
+double app_tminterval(int stop, int usertime)
+{
+    double ret = 0;
+    struct tms rus;
+    clock_t now = times(&rus);
+    static clock_t tmstart;
+
+    if (usertime)
+        now = rus.tms_utime;
+
+    if (stop == TM_START) {
+        tmstart = now;
+    } else {
+        long int tck = sysconf(_SC_CLK_TCK);
+        ret = (now - tmstart) / (double)tck;
+    }
+
+    return ret;
+}
+
+static void alarmed(int sig)
+{
+    signal(SIGALRM, alarmed);
+    run = 0;
+}
+
+static double Time_F(int s)
+{
+    double ret = app_tminterval(s, usertime);
+    if (s == STOP)
+        alarm(0);
+    return ret;
+}
 
 static int get_faked_bytes(unsigned char *buf, size_t num,
                            ossl_unused const char *name,
@@ -95,6 +148,64 @@ static EC_GROUP *create_EC_group(const char *p_hex, const char *a_hex,
         goto done;
 
     group = EC_GROUP_new_curve_sm2_GFp(p, a, b, NULL);
+    if (!TEST_ptr(group))
+        goto done;
+
+    generator = EC_POINT_new(group);
+    if (!TEST_ptr(generator))
+        goto done;
+
+    if (!TEST_true(BN_hex2bn(&g_x, x_hex))
+            || !TEST_true(BN_hex2bn(&g_y, y_hex))
+            || !TEST_true(EC_POINT_set_affine_coordinates(group, generator, g_x,
+                                                          g_y, NULL)))
+        goto done;
+
+    if (!TEST_true(BN_hex2bn(&order, order_hex))
+            || !TEST_true(BN_hex2bn(&cof, cof_hex))
+            || !TEST_true(EC_GROUP_set_generator(group, generator, order, cof)))
+        goto done;
+
+    ok = 1;
+done:
+    BN_free(p);
+    BN_free(a);
+    BN_free(b);
+    BN_free(g_x);
+    BN_free(g_y);
+    EC_POINT_free(generator);
+    BN_free(order);
+    BN_free(cof);
+    if (!ok) {
+        EC_GROUP_free(group);
+        group = NULL;
+    }
+
+    return group;
+}
+
+static EC_GROUP *create_EC_group_slow(const char *p_hex, const char *a_hex,
+                                 const char *b_hex, const char *x_hex,
+                                 const char *y_hex, const char *order_hex,
+                                 const char *cof_hex)
+{
+    BIGNUM *p = NULL;
+    BIGNUM *a = NULL;
+    BIGNUM *b = NULL;
+    BIGNUM *g_x = NULL;
+    BIGNUM *g_y = NULL;
+    BIGNUM *order = NULL;
+    BIGNUM *cof = NULL;
+    EC_POINT *generator = NULL;
+    EC_GROUP *group = NULL;
+    int ok = 0;
+
+    if (!TEST_true(BN_hex2bn(&p, p_hex))
+            || !TEST_true(BN_hex2bn(&a, a_hex))
+            || !TEST_true(BN_hex2bn(&b, b_hex)))
+        goto done;
+
+    group = EC_GROUP_new_curve_GFp(p, a, b, NULL);
     if (!TEST_ptr(group))
         goto done;
 
@@ -325,6 +436,100 @@ static int test_sm2_sign(const EC_GROUP *group,
     return ok;
 }
 
+static int speed_sm2_sign(const EC_GROUP *group,
+                         const char *userid,
+                         const char *privkey_hex,
+                         const char *message,
+                         const char *k_hex,
+                         const char *r_hex,
+                         const char *s_hex)
+{
+    const size_t msg_len = strlen(message);
+    long int ok = 0, count;
+    BIGNUM *priv = NULL;
+    EC_POINT *pt = NULL;
+    EC_KEY *key = NULL;
+    ECDSA_SIG *sig = NULL;
+    double d = 0.0;
+    // const BIGNUM *sig_r = NULL;
+    // const BIGNUM *sig_s = NULL;
+    // BIGNUM *r = NULL;
+    // BIGNUM *s = NULL;
+#if SIGALRM > 0
+    signal(SIGALRM, alarmed);
+#endif
+
+    if (!TEST_true(BN_hex2bn(&priv, privkey_hex)))
+        goto done;
+
+    key = EC_KEY_new();
+    if (!TEST_ptr(key)
+            || !TEST_true(EC_KEY_set_group(key, group))
+            || !TEST_true(EC_KEY_set_private_key(key, priv)))
+        goto done;
+
+    pt = EC_POINT_new(group);
+    if (!TEST_ptr(pt)
+            || !TEST_true(EC_POINT_mul(group, pt, priv, NULL, NULL, NULL))
+            || !TEST_true(EC_KEY_set_public_key(key, pt)))
+        goto done;
+
+    start_fake_rand(k_hex);
+    run = 1;
+    Time_F(START);
+    // 0x7fffffff
+    for(count = 0; run && (count < 0x7ffff); count++){
+        sig = ossl_sm2_do_sign(key, EVP_sm3(), (const uint8_t *)userid,
+                           strlen(userid), (const uint8_t *)message, msg_len);
+    }
+    d = Time_F(STOP);
+
+    BIO_printf(bio_err,
+                "%ld %u bits %s signs in %.2fs \n",
+                count, 256,
+                "SM2", d);
+    BIO_printf(bio_err, "%8.1f sign/s\n", (double)count / d);
+    if (!TEST_ptr(sig)) {
+        restore_rand();
+        goto done;
+    }
+    restore_rand();
+
+    // ECDSA_SIG_get0(sig, &sig_r, &sig_s);
+
+    // if (!TEST_true(BN_hex2bn(&r, r_hex))
+    //         || !TEST_true(BN_hex2bn(&s, s_hex))
+    //         || !TEST_BN_eq(r, sig_r)
+    //         || !TEST_BN_eq(s, sig_s))
+    //     goto done;
+    d = 0.0;
+    Time_F(START);
+    // 0x7fffffff
+    for(count = 0; run && (count < 0x7ffff); count++){
+    ok = ossl_sm2_do_verify(key, EVP_sm3(), sig, (const uint8_t *)userid,
+                            strlen(userid), (const uint8_t *)message, msg_len);
+    }
+    d = Time_F(STOP);
+
+    BIO_printf(bio_err,
+                "%ld %u bits %s verifys in %.2fs \n",
+                count, 256,
+                "SM2", d);
+    BIO_printf(bio_err, "%8.1f verify/s\n", (double)count / d);
+    /* We goto done whether this passes or fails */
+    TEST_true(ok);
+
+ done:
+    ECDSA_SIG_free(sig);
+    EC_POINT_free(pt);
+    EC_KEY_free(key);
+    BN_free(priv);
+    // BN_free(r);
+    // BN_free(s);
+
+    return ok;
+}
+
 static int sm2_sig_test(void)
 {
     int testresult = 0;
@@ -339,10 +544,42 @@ static int sm2_sig_test(void)
          "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123",
          "1");
 
+    EC_GROUP *test_group_slow =
+        create_EC_group_slow
+        ("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF",
+         "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC",
+         "28E9FA9E9D9F5E344D5A9E4BCF6509A7F39789F515AB8F92DDBCBD414D940E93",
+         "32C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7",
+         "BC3736A2F4F6779C59BDCEE36B692153D0A9877CC62A474002DF32E52139F0A0",
+         "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123",
+         "1");
+
     if (!TEST_ptr(test_group))
         goto done;
 
     if (!TEST_true(test_sm2_sign(
+                        test_group,
+                        "ALICE123@YAHOO.COM",
+                        "128B2FA8BD433C6C068C8D803DFF79792A519A55171B1B650C23661D15897263",
+                        "message digest",
+                        "006CB28D99385C175C94F94E934817663FC176D925DD72B727260DBAAE1FB2F96F"
+                        "007c47811054c6f99613a578eb8453706ccb96384fe7df5c171671e760bfa8be3a",
+                        "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D1",
+                        "6FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7")))
+        goto done;
+
+    if (!TEST_true(speed_sm2_sign(
+                        test_group_slow,
+                        "ALICE123@YAHOO.COM",
+                        "128B2FA8BD433C6C068C8D803DFF79792A519A55171B1B650C23661D15897263",
+                        "message digest",
+                        "006CB28D99385C175C94F94E934817663FC176D925DD72B727260DBAAE1FB2F96F"
+                        "007c47811054c6f99613a578eb8453706ccb96384fe7df5c171671e760bfa8be3a",
+                        "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D1",
+                        "6FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7")))
+        goto done;
+
+    if (!TEST_true(speed_sm2_sign(
                         test_group,
                         "ALICE123@YAHOO.COM",
                         "128B2FA8BD433C6C068C8D803DFF79792A519A55171B1B650C23661D15897263",
