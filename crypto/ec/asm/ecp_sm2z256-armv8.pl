@@ -1474,6 +1474,52 @@ ecp_sm2z256_ord_add:
 	ldp	x29,x30,[sp],#32
 	ret
 .size	ecp_sm2z256_ord_add,.-ecp_sm2z256_ord_add
+
+
+////////////////////////////////////////////////////////////////////////
+// void ecp_sm2z256_ord_sub(uint64_t res[4], uint64_t a[4], uint64_t b[4]);
+// res=a-b
+.globl	ecp_sm2z256_ord_sub
+.type	ecp_sm2z256_ord_sub,%function
+.align	4
+ecp_sm2z256_ord_sub:
+	stp	x29,x30,[sp,#-32]!
+	add	x29,sp,#0
+	stp	x19,x20,[sp,#16]
+	// load input and order
+	adr		$acc0,.Lord
+	ldp		$a0,$a1,[$ap]
+	ldp		$a2,$a3,[$ap,#16]
+	ldp		$ord0,$ord1,[$acc0,#0]
+	ldp		$ord2,$ord3,[$acc0,#16]
+	ldp		$b0,$b1,[$bp]
+	ldp		$b2,$b3,[$bp,#16]
+	// a-b
+	subs	$a0,$a0,$b0
+	sbcs	$a1,$a1,$b1
+	sbcs 	$a2,$a2,$b2
+	sbcs	$a3,$a3,$b3
+	sbc		$a4,xzr,xzr
+
+	// a+order
+	adds	$acc0, $a0, $ord0
+	adcs	$acc1, $a1, $ord1
+	adcs	$acc2, $a2, $ord2
+	adc		$acc3, $a3, $ord3
+	// did subtraction borrow?
+	cmp		$a4,xzr
+
+	// ret = borrow ? ret+order : ret
+	csel	$acc0, $a0, $acc0, eq
+	csel	$acc1, $a1, $acc1, eq
+	stp		$acc0, $acc1, [$rp]
+	csel	$acc2, $a2, $acc2, eq
+	csel	$acc3, $a3, $acc3, eq
+	stp		$acc2, $acc3, [$rp, #16]
+	ldp	x19,x20,[sp,#16]
+	ldp	x29,x30,[sp],#32
+	ret
+.size	ecp_sm2z256_ord_sub,.-ecp_sm2z256_ord_sub
 ___
 }
 
