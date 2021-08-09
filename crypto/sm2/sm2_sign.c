@@ -22,11 +22,16 @@
 #include <openssl/bn.h>
 #include <string.h>
 
-#if 0
+#if 1
 #define P256_LIMBS      (256/BN_BITS2)
+# define TOBN(hi,lo)    ((BN_ULONG)hi<<32|lo)
 void ecp_sm2z256_ord_sub_reduce(BN_ULONG res[4], BN_ULONG a[4]);
 void ecp_sm2z256_ord_add(BN_ULONG res[4], BN_ULONG a[4], BN_ULONG b[4]);
+void ecp_sm2z256_ord_mul_mont(BN_ULONG res[4], BN_ULONG a[4],
+                               BN_ULONG b[4]);
+void ecp_sm2z256_ord_negative(BN_ULONG res[4], BN_ULONG a[4]);
 
+/* in1/in2 \in [0,2^256-1], this function compute in1+in2 mod n */
 static int BN_SM2_add_ord(BIGNUM *r, const BIGNUM *in1, const BIGNUM *in2){
     BN_ULONG x[P256_LIMBS];
     BN_ULONG y[P256_LIMBS];
@@ -39,11 +44,57 @@ static int BN_SM2_add_ord(BIGNUM *r, const BIGNUM *in1, const BIGNUM *in2){
     ecp_sm2z256_ord_sub_reduce(x, x);
     ecp_sm2z256_ord_sub_reduce(y, y);
     ecp_sm2z256_ord_add(x, x, y);
-    if (!bn_set_words(r, x, P256_LIMBS))
+    if (!bn_set_words(r, x, P256_LIMBS)){
+        ERR_raise(ERR_LIB_SM2, ERR_R_BN_LIB);
         return 0;
+    }
     return 1;
 }
-    #define BN_mod_add(r, e, x1, order, ctx) BN_SM2_add_ord(r, e, x1)
+
+/* r=in1*in2 mod ord(sm2) */
+static int BN_SM2_ord_mul_mont(BIGNUM *r, const BIGNUM *in1, const BIGNUM *in2, const BIGNUM *order, BN_CTX *ctx){
+    /* RR = 2^512 mod ord(sm2) */
+    static BN_ULONG RR[P256_LIMBS]  = {
+        TOBN(0x901192af,0x7c114f20), TOBN(0x3464504a,0xde6fa2fa),
+        TOBN(0x620fc84c,0x3affe0d4), TOBN(0x1eb5e412,0xa22b3d3b)
+    };
+    BN_ULONG x[P256_LIMBS];
+    BN_ULONG y[P256_LIMBS];
+
+    /*
+     * Catch allocation failure early.
+     */
+    // if (bn_wexpand(r, P256_LIMBS) == NULL) {
+    //     ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
+    //     return 0;
+    // }
+
+    if (!bn_copy_words(x, in1, P256_LIMBS) ||
+       !bn_copy_words(y, in2, P256_LIMBS)) {
+        ERR_raise(ERR_LIB_EC, EC_R_COORDINATES_OUT_OF_RANGE);
+        return 0;
+    }
+
+    if (BN_is_negative(in1)) {
+        ecp_sm2z256_ord_negative(x, x);
+    }
+
+    if (BN_is_negative(in2)) {
+        ecp_sm2z256_ord_negative(y, y);
+    }
+
+    ecp_sm2z256_ord_mul_mont(x, x, RR);
+    ecp_sm2z256_ord_mul_mont(x, x, y);
+    if (!bn_set_words(r, x, P256_LIMBS)){
+        ERR_raise(ERR_LIB_SM2, ERR_R_BN_LIB);
+        return 0;
+    }
+    return 1;
+}
+
+    /* only effect in this file for computing add/mul mod ord(sm2) */
+    #define BN_mod_add(r, e, x1, order, ctx)    BN_SM2_add_ord(r, e, x1)
+    #define BN_mod_mul(r, a, b, order, ctx)     BN_SM2_ord_mul_mont(r, a, b, order, ctx)
 #endif
 
 int ossl_sm2_compute_z_digest(uint8_t *out,
@@ -289,6 +340,7 @@ static ECDSA_SIG *sm2_sig_gen(const EC_KEY *key, const BIGNUM *e)
         if (BN_cmp(rk, order) == 0)
             continue;
 
+        /* s=(1+dA)^-1 * (k-r*dA) mod n */
         if (!BN_add(s, dA, BN_value_one())
                 || !ossl_ec_group_do_inverse_ord(group, s, s, ctx)
                 || !BN_mod_mul(tmp, dA, r, order, ctx)
@@ -297,6 +349,11 @@ static ECDSA_SIG *sm2_sig_gen(const EC_KEY *key, const BIGNUM *e)
             ERR_raise(ERR_LIB_SM2, ERR_R_BN_LIB);
             goto done;
         }
+
+        /* (k+r)*(1+dA)^-1-r mod n, which can replace a mul with a add */
+        // if (!BN_add(s, dA, BN_value_one)
+        //         || !ossl_ec_group_do_inverse_ord(group, s, s, ctx)
+        //         )
 
         sig = ECDSA_SIG_new();
         if (sig == NULL) {

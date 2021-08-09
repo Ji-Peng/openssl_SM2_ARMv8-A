@@ -1385,7 +1385,7 @@ void ecp_sm2z256_ord_sqr_mont(BN_ULONG res[P256_LIMBS],
 static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
                                     const BIGNUM *x, BN_CTX *ctx)
 {
-    /* RR = 2^512 mod ord(p256) */
+    /* RR = 2^512 mod ord(sm2) */
     static const BN_ULONG RR[P256_LIMBS]  = {
         TOBN(0x901192af,0x7c114f20), TOBN(0x3464504a,0xde6fa2fa),
         TOBN(0x620fc84c,0x3affe0d4), TOBN(0x1eb5e412,0xa22b3d3b)
@@ -1398,13 +1398,8 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
      * We don't use entry 0 in the table, so we omit it and address
      * with -1 offset.
      */
-    BN_ULONG table[11][P256_LIMBS];
     BN_ULONG out[P256_LIMBS], t[P256_LIMBS];
     int i, ret = 0;
-    enum {
-        i_1 = 0, i_11,     i_101, i_111, i_1001, i_1011, i_1111,
-        i_10101, i_11111,  i_x31, i_x32
-    };
 
     /*
      * Catch allocation failure early.
@@ -1429,11 +1424,14 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
         ERR_raise(ERR_LIB_EC, EC_R_COORDINATES_OUT_OF_RANGE);
         goto err;
     }
+#if 0
+    BN_ULONG table[15][P256_LIMBS];
+    BN_ULONG t2[P256_LIMBS];
     // trans to mont field
     ecp_sm2z256_ord_mul_mont(table[0], t, RR);
-#if 0
     /*
      * Original sparse-then-fixed-window algorithm, retained for reference.
+     * table[1]=_10, table[2]=_11, ...
      */
     for (i = 2; i < 16; i += 2) {
         ecp_sm2z256_ord_sqr_mont(table[i-1], table[i/2-1], 1);
@@ -1445,36 +1443,49 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
      * perform an optimized flow
      */
     ecp_sm2z256_ord_sqr_mont(t, table[15-1], 4);   /* f0 */
+    ecp_sm2z256_ord_mul_mont(t2, t, table[14-1]);  /* fe */
     ecp_sm2z256_ord_mul_mont(t, t, table[15-1]);   /* ff */
 
     ecp_sm2z256_ord_sqr_mont(out, t, 8);           /* ff00 */
+    ecp_sm2z256_ord_mul_mont(t2, out, t2);         /* fffe */
     ecp_sm2z256_ord_mul_mont(out, out, t);         /* ffff */
 
     ecp_sm2z256_ord_sqr_mont(t, out, 16);          /* ffff0000 */
-    ecp_sm2z256_ord_mul_mont(t, t, out);           /* ffffffff */
+    ecp_sm2z256_ord_mul_mont(t, t, t2);            /* fffffffe */
+    ecp_sm2z256_ord_mul_mont(t2, t, table[1-1]);   /* ffffffff */
 
-    ecp_sm2z256_ord_sqr_mont(out, t, 64);          /* ffffffff0000000000000000 */
-    ecp_sm2z256_ord_mul_mont(out, out, t);         /* ffffffff00000000ffffffff */
+    ecp_sm2z256_ord_sqr_mont(out, t, 32);          /* fffffffe00000000 */
+    ecp_sm2z256_ord_mul_mont(out, out, t2);        /* fffffffeffffffff */
+    ecp_sm2z256_ord_mul_mont(t, out, table[1-1]);  /* ffffffff00000000 */
+    ecp_sm2z256_ord_mul_mont(t, t, t2);            /* ffffffffffffffff */
 
-    ecp_sm2z256_ord_sqr_mont(out, out, 32);        /* ffffffff00000000ffffffff00000000 */
-    ecp_sm2z256_ord_mul_mont(out, out, t);         /* ffffffff00000000ffffffffffffffff */
+    ecp_sm2z256_ord_sqr_mont(out, out, 64);        /* fffffffeffffffff0000000000000000 */
+    ecp_sm2z256_ord_mul_mont(out, out, t);         /* fffffffeffffffffffffffffffffffff */
 
     /*
      * The bottom 128 bit of the exponent are processed with fixed 4-bit window
      */
     for(i = 0; i < 32; i++) {
-        /* expLo - the low 128 bits of the exponent we use (ord(p256) - 2),
+        /* expLo - the low 128 bits of the exponent we use (ord(sm2) - 2),
          * split into nibbles */
         static const unsigned char expLo[32]  = {
-            0xb,0xc,0xe,0x6,0xf,0xa,0xa,0xd,0xa,0x7,0x1,0x7,0x9,0xe,0x8,0x4,
-            0xf,0x3,0xb,0x9,0xc,0xa,0xc,0x2,0xf,0xc,0x6,0x3,0x2,0x5,0x4,0xf
+            0x7,0x2,0x0,0x3,0xd,0xf,0x6,0xb,0x2,0x1,0xc,0x6,0x0,0x5,0x2,0xb,
+            0x5,0x3,0xb,0xb,0xf,0x4,0x0,0x9,0x3,0x9,0xd,0x5,0x4,0x1,0x2,0x1
         };
 
         ecp_sm2z256_ord_sqr_mont(out, out, 4);
         /* The exponent is public, no need in constant-time access */
-        ecp_sm2z256_ord_mul_mont(out, out, table[expLo[i]-1]);
+        if (expLo[i] != 0)
+            ecp_sm2z256_ord_mul_mont(out, out, table[expLo[i]-1]);
     }
 #else
+    BN_ULONG table[11][P256_LIMBS];
+    enum {
+        i_1 = 0, i_11,     i_101, i_111, i_1001, i_1011, i_1111,
+        i_10101, i_11111,  i_x31, i_x32
+    };
+    // trans to mont field
+    ecp_sm2z256_ord_mul_mont(table[0], t, RR);
     /*
      * https://briansmith.org/ecc-inversion-addition-chains-01#p256_scalar_inversion
      *

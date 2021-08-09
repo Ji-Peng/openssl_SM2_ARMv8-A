@@ -1356,7 +1356,7 @@ $code.=<<___;
 ___
 }
 
-if (0) {
+if (1) {
 my ($ord0,$ord1,$ord2,$ord3) = ($poly1,$poly3,$bp,$bi);
 $code.=<<___;
 ////////////////////////////////////////////////////////////////////////
@@ -1395,7 +1395,41 @@ ecp_sm2z256_ord_sub_reduce:
 ___
 }
 
-if (0) {
+if (1) {
+my ($ord0,$ord1,$ord2,$ord3) = ($poly1,$poly3,$bp,$bi);
+$code.=<<___;
+////////////////////////////////////////////////////////////////////////
+// void ecp_sm2z256_ord_negative(uint64_t res[4], uint64_t a[4]);
+// res=order-a suppose a<order
+.globl	ecp_sm2z256_ord_negative
+.type	ecp_sm2z256_ord_negative,%function
+.align	4
+ecp_sm2z256_ord_negative:
+	stp	x29,x30,[sp,#-32]!
+	add	x29,sp,#0
+	stp	x19,x20,[sp,#16]
+	// load input and order
+	adr		$t0,.Lord
+	ldp		$a0,$a1,[$ap]
+	ldp		$a2,$a3,[$ap,#16]
+	ldp		$ord0,$ord1,[$t0,#0]
+	ldp		$ord2,$ord3,[$t0,#16]
+	// order-a
+	subs	$a0, $ord0, $a0
+	sbcs	$a1, $ord1, $a1
+	sbcs	$a2, $ord2, $a2
+	sbcs	$a3, $ord3, $a3
+	// store
+	stp		$a0, $a1, [$rp]
+	stp		$a2, $a3, [$rp, #16]
+	ldp	x19,x20,[sp,#16]
+	ldp	x29,x30,[sp],#32
+	ret
+.size	ecp_sm2z256_ord_negative,.-ecp_sm2z256_ord_negative
+___
+}
+
+if (1) {
 my ($ord0,$ord1,$ord2,$ord3) = ($t0,$t1,$t2,$t3);
 my ($b0,$b1,$b2,$b3,$a4) = ($poly1,$poly3,$acc3,$acc4,$acc5);
 $code.=<<___;
