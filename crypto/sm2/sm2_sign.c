@@ -96,13 +96,13 @@ static int BN_SM2_ord_sub(BIGNUM *r, const BIGNUM *in1, const BIGNUM *in2, const
         return 0;
     }
 
-    if (BN_is_negative(in1)) {
-        ecp_sm2z256_ord_negative(x, x);
-    }
+    // if (BN_is_negative(in1)) {
+    //     ecp_sm2z256_ord_negative(x, x);
+    // }
 
-    if (BN_is_negative(in2)) {
-        ecp_sm2z256_ord_negative(y, y);
-    }
+    // if (BN_is_negative(in2)) {
+    //     ecp_sm2z256_ord_negative(y, y);
+    // }
 
     ecp_sm2z256_ord_sub(x, x, y);
     if (!bn_set_words(r, x, P256_LIMBS)){
