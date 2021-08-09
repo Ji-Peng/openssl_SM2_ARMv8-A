@@ -13,6 +13,7 @@
 
 #include "crypto/sm2.h"
 #include "crypto/sm2err.h"
+#include "crypto/bn.h"
 #include "crypto/ec.h" /* ossl_ec_group_do_inverse_ord() */
 #include "internal/numbers.h"
 #include <openssl/err.h>
@@ -20,6 +21,30 @@
 #include <openssl/err.h>
 #include <openssl/bn.h>
 #include <string.h>
+
+#if 0
+#define P256_LIMBS      (256/BN_BITS2)
+void ecp_sm2z256_ord_sub_reduce(BN_ULONG res[4], BN_ULONG a[4]);
+void ecp_sm2z256_ord_add(BN_ULONG res[4], BN_ULONG a[4], BN_ULONG b[4]);
+
+static int BN_SM2_add_ord(BIGNUM *r, const BIGNUM *in1, const BIGNUM *in2){
+    BN_ULONG x[P256_LIMBS];
+    BN_ULONG y[P256_LIMBS];
+
+    if (!bn_copy_words(x, in1, P256_LIMBS) ||
+       !bn_copy_words(y, in2, P256_LIMBS)) {
+        ERR_raise(ERR_LIB_EC, EC_R_COORDINATES_OUT_OF_RANGE);
+        return 0;
+    }
+    ecp_sm2z256_ord_sub_reduce(x, x);
+    ecp_sm2z256_ord_sub_reduce(y, y);
+    ecp_sm2z256_ord_add(x, x, y);
+    if (!bn_set_words(r, x, P256_LIMBS))
+        return 0;
+    return 1;
+}
+    #define BN_mod_add(r, e, x1, order, ctx) BN_SM2_add_ord(r, e, x1)
+#endif
 
 int ossl_sm2_compute_z_digest(uint8_t *out,
                               const EVP_MD *digest,
@@ -244,7 +269,6 @@ static ECDSA_SIG *sm2_sig_gen(const EC_KEY *key, const BIGNUM *e)
             ERR_raise(ERR_LIB_SM2, ERR_R_INTERNAL_ERROR);
             goto done;
         }
-
         if (!EC_POINT_mul(group, kG, k, NULL, NULL, ctx)
                 || !EC_POINT_get_affine_coordinates(group, kG, x1, NULL,
                                                     ctx)

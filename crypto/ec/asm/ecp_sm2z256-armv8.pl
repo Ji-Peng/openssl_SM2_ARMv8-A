@@ -1355,6 +1355,94 @@ $code.=<<___;
 .size	ecp_sm2z256_point_add_affine,.-ecp_sm2z256_point_add_affine
 ___
 }
+
+if (0) {
+my ($ord0,$ord1,$ord2,$ord3) = ($poly1,$poly3,$bp,$bi);
+$code.=<<___;
+////////////////////////////////////////////////////////////////////////
+// void ecp_sm2z256_ord_sub_reduce(uint64_t res[4], uint64_t a[4]);
+// if a>ord then res=a-ord. else res=a
+.globl	ecp_sm2z256_ord_sub_reduce
+.type	ecp_sm2z256_ord_sub_reduce,%function
+.align	4
+ecp_sm2z256_ord_sub_reduce:
+	stp	x29,x30,[sp,#-32]!
+	add	x29,sp,#0
+	stp	x19,x20,[sp,#16]
+	// load input and order
+	adr		$t0,.Lord
+	ldp		$a0,$a1,[$ap]
+	ldp		$a2,$a3,[$ap,#16]
+	ldp		$ord0,$ord1,[$t0,#0]
+	ldp		$ord2,$ord3,[$t0,#16]
+	// a-order
+	subs	$acc0, $a0, $ord0
+	sbcs	$acc1, $a1, $ord1
+	sbcs	$acc2, $a2, $ord2
+	sbcs	$acc3, $a3, $ord3
+
+	// ret = borrow ? ret : ret-order
+	csel	$acc0, $a0, $acc0, lo
+	csel	$acc1, $a1, $acc1, lo
+	stp		$acc0, $acc1, [$rp]
+	csel	$acc2, $a2, $acc2, lo
+	csel	$acc3, $a3, $acc3, lo
+	stp		$acc2, $acc3, [$rp, #16]
+	ldp	x19,x20,[sp,#16]
+	ldp	x29,x30,[sp],#32
+	ret
+.size	ecp_sm2z256_ord_sub_reduce,.-ecp_sm2z256_ord_sub_reduce
+___
+}
+
+if (0) {
+my ($ord0,$ord1,$ord2,$ord3) = ($t0,$t1,$t2,$t3);
+my ($b0,$b1,$b2,$b3,$a4) = ($poly1,$poly3,$acc3,$acc4,$acc5);
+$code.=<<___;
+// void ecp_sm2z256_ord_add(uint64_t res[4], uint64_t a[4], uint64_4 b[4]);
+// a+=b => if a>ord then res=a-ord. else res=a
+.globl	ecp_sm2z256_ord_add
+.type	ecp_sm2z256_ord_add,%function
+.align	4
+ecp_sm2z256_ord_add:
+	stp	x29,x30,[sp,#-32]!
+	add	x29,sp,#0
+	stp	x19,x20,[sp,#16]
+	// load input and order
+	adr		$acc0,.Lord
+	ldp		$a0,$a1,[$ap]
+	ldp		$a2,$a3,[$ap,#16]
+	ldp		$ord0,$ord1,[$acc0,#0]
+	ldp		$ord2,$ord3,[$acc0,#16]
+	ldp		$b0,$b1,[$bp]
+	ldp		$b2,$b3,[$bp,#16]
+	// a+b
+	adds	$a0,$a0,$b0
+	adcs	$a1,$a1,$b1
+	adcs 	$a2,$a2,$b2
+	adcs	$a3,$a3,$b3
+	adc		$a4,xzr,xzr
+	// a-order
+	subs	$acc0, $a0, $ord0
+	sbcs	$acc1, $a1, $ord1
+	sbcs	$acc2, $a2, $ord2
+	sbcs	$acc3, $a3, $ord3
+	sbcs	xzr, $a4, xzr
+
+	// ret = borrow ? ret : ret-order
+	csel	$acc0, $a0, $acc0, lo
+	csel	$acc1, $a1, $acc1, lo
+	stp		$acc0, $acc1, [$rp]
+	csel	$acc2, $a2, $acc2, lo
+	csel	$acc3, $a3, $acc3, lo
+	stp		$acc2, $acc3, [$rp, #16]
+	ldp	x19,x20,[sp,#16]
+	ldp	x29,x30,[sp],#32
+	ret
+.size	ecp_sm2z256_ord_add,.-ecp_sm2z256_ord_add
+___
+}
+
 if (1) {
 my ($ord0,$ord1) = ($poly1,$poly3);
 my ($ord2,$ord3,$ordk,$t4) = map("x$_",(21..24));

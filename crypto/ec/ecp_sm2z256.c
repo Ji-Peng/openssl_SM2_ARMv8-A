@@ -506,6 +506,7 @@ static void ecp_sm2z256_point_add_affine(P256_POINT *r,
 }
 #endif
 
+#if (0)
 /* r = in^-1 mod p */
 static void ecp_sm2z256_mod_inverse(BN_ULONG r[P256_LIMBS],
                                      const BN_ULONG in[P256_LIMBS])
@@ -589,6 +590,90 @@ static void ecp_sm2z256_mod_inverse(BN_ULONG r[P256_LIMBS],
         ecp_sm2z256_sqr_mont(a5, a5);
     }
     ecp_sm2z256_mul_mont(r, a4, a5);
+}
+#endif
+
+/* r = in^-2 = in^(q-3) mod p
+ * See: https://briansmith.org/ecc-inversion-addition-chains-01#p256_scalar_inversion
+ */
+static void ecp_sm2z256_mod_inverse_sqr(BN_ULONG r[P256_LIMBS],
+                                       const BN_ULONG in[P256_LIMBS])
+{
+    BN_ULONG xtp[P256_LIMBS];
+    BN_ULONG x30[P256_LIMBS];
+    // BN_ULONG x31[P256_LIMBS];
+    BN_ULONG x32[P256_LIMBS];
+    // don't change them
+    #define x1 in
+    #define x2 x32
+    #define x3 r
+    #define x31 r
+    int i;
+    // construct x30, 31, x32
+    // x2=x1<<1+x1
+    ecp_sm2z256_sqr_mont(x2, x1);
+    ecp_sm2z256_mul_mont(x2, x2, x1);
+    // x3=x2<<1+x1
+    ecp_sm2z256_sqr_mont(x3, x2);
+    ecp_sm2z256_mul_mont(x3, x3, x1);
+    // x6=x3<<3+x3
+    ecp_sm2z256_sqr_mont(xtp, x3);
+    for(i = 0; i < 2; i++)
+        ecp_sm2z256_sqr_mont(xtp, xtp);
+    ecp_sm2z256_mul_mont(xtp, xtp, x3);
+    // x12=x6<<6+x6
+    ecp_sm2z256_sqr_mont(x30, xtp);
+    for(i = 0; i < 5; i++)
+        ecp_sm2z256_sqr_mont(x30, x30);
+    ecp_sm2z256_mul_mont(xtp, xtp, x30);
+    // x15=x12<<3+x3
+    ecp_sm2z256_sqr_mont(x30, xtp);
+    for(i = 0; i < 2; i++)
+        ecp_sm2z256_sqr_mont(x30, x30);
+    ecp_sm2z256_mul_mont(xtp, x30, x3);
+    // x30=x15<<15+x15
+    ecp_sm2z256_sqr_mont(x30, xtp);
+    for(i = 0; i < 14; i++)
+        ecp_sm2z256_sqr_mont(x30, x30);
+    ecp_sm2z256_mul_mont(x30, x30, xtp);
+    // x31=x30<<1+x1
+    ecp_sm2z256_sqr_mont(x31, x30);
+    ecp_sm2z256_mul_mont(x31, x31, x1);
+    // x32=x30<<2+x2
+    ecp_sm2z256_sqr_mont(xtp, x30);
+    ecp_sm2z256_sqr_mont(xtp, xtp);
+    ecp_sm2z256_mul_mont(x32, xtp, x2);
+    #undef x1
+    #undef x2
+    #undef x3
+    // x31<<33+x32
+    for(i = 0; i < 33; i++)
+        ecp_sm2z256_sqr_mont(x31, x31);
+    ecp_sm2z256_mul_mont(x31, x31, x32);
+    // x31<<32+32
+    for(i = 0; i < 32; i++)
+        ecp_sm2z256_sqr_mont(x31, x31);
+    ecp_sm2z256_mul_mont(x31, x31, x32);
+    // x31<<32+32
+    for(i = 0; i < 32; i++)
+        ecp_sm2z256_sqr_mont(x31, x31);
+    ecp_sm2z256_mul_mont(x31, x31, x32);
+    // x31<<32+32
+    for(i = 0; i < 32; i++)
+        ecp_sm2z256_sqr_mont(x31, x31);
+    ecp_sm2z256_mul_mont(x31, x31, x32);
+    // x31<<64+32
+    for(i = 0; i < 64; i++)
+        ecp_sm2z256_sqr_mont(x31, x31);
+    ecp_sm2z256_mul_mont(x31, x31, x32);
+    // x31<<30+x30
+    for(i = 0; i < 30; i++)
+        ecp_sm2z256_sqr_mont(x31, x31);
+    ecp_sm2z256_mul_mont(x31, x31, x30);
+    // x31<<2
+    ecp_sm2z256_sqr_mont(x31, x31);
+    ecp_sm2z256_sqr_mont(x31, x31);
+    #undef x31
 }
 
 /*
@@ -1189,8 +1274,10 @@ __owur static int ecp_sm2z256_get_affine(const EC_GROUP *group,
         return 0;
     }
 
-    ecp_sm2z256_mod_inverse(z_inv3, point_z);
-    ecp_sm2z256_sqr_mont(z_inv2, z_inv3);
+    // ecp_sm2z256_mod_inverse(z_inv3, point_z);
+    // ecp_sm2z256_sqr_mont(z_inv2, z_inv3);
+    // z^-2
+    ecp_sm2z256_mod_inverse_sqr(z_inv2, point_z);
     ecp_sm2z256_mul_mont(x_aff, z_inv2, point_x);
 
     if (x != NULL) {
@@ -1200,7 +1287,11 @@ __owur static int ecp_sm2z256_get_affine(const EC_GROUP *group,
     }
 
     if (y != NULL) {
-        ecp_sm2z256_mul_mont(z_inv3, z_inv3, z_inv2);
+        // ecp_sm2z256_mul_mont(z_inv3, z_inv3, z_inv2);
+        // z^-4
+        ecp_sm2z256_sqr_mont(z_inv3, z_inv2);
+        // z^-3
+        ecp_sm2z256_mul_mont(z_inv3, z_inv3, point_z);
         ecp_sm2z256_mul_mont(y_aff, z_inv3, point_y);
         ecp_sm2z256_from_mont(y_ret, y_aff);
         if (!bn_set_words(y, y_ret, P256_LIMBS))
@@ -1307,12 +1398,12 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
      * We don't use entry 0 in the table, so we omit it and address
      * with -1 offset.
      */
-    BN_ULONG table[15][P256_LIMBS];
+    BN_ULONG table[11][P256_LIMBS];
     BN_ULONG out[P256_LIMBS], t[P256_LIMBS];
     int i, ret = 0;
     enum {
-        i_1 = 0, i_10,     i_11,     i_101, i_111, i_1010, i_1111,
-        i_10101, i_101010, i_101111, i_x6,  i_x8,  i_x16,  i_x32
+        i_1 = 0, i_11,     i_101, i_111, i_1001, i_1011, i_1111,
+        i_10101, i_11111,  i_x31, i_x32
     };
 
     /*
@@ -1338,7 +1429,7 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
         ERR_raise(ERR_LIB_EC, EC_R_COORDINATES_OUT_OF_RANGE);
         goto err;
     }
-
+    // trans to mont field
     ecp_sm2z256_ord_mul_mont(table[0], t, RR);
 #if 0
     /*
@@ -1393,57 +1484,73 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
      */
 
     /* pre-calculate powers */
-    ecp_sm2z256_ord_sqr_mont(table[i_10], table[i_1], 1);
-
-    ecp_sm2z256_ord_mul_mont(table[i_11], table[i_1], table[i_10]);
-
-    ecp_sm2z256_ord_mul_mont(table[i_101], table[i_11], table[i_10]);
-
-    ecp_sm2z256_ord_mul_mont(table[i_111], table[i_101], table[i_10]);
-
-    ecp_sm2z256_ord_sqr_mont(table[i_1010], table[i_101], 1);
-
-    ecp_sm2z256_ord_mul_mont(table[i_1111], table[i_1010], table[i_101]);
-
-    ecp_sm2z256_ord_sqr_mont(table[i_10101], table[i_1010], 1);
+    // t=i_10=i_1<<1
+    ecp_sm2z256_ord_sqr_mont(t, table[i_1], 1);
+    // i_11=i_10+i_1
+    ecp_sm2z256_ord_mul_mont(table[i_11], t, table[i_1]);
+    // i_101=i_10+i_11
+    ecp_sm2z256_ord_mul_mont(table[i_101], t, table[i_11]);
+    // i_111=i_10+i_101
+    ecp_sm2z256_ord_mul_mont(table[i_111], t, table[i_101]);
+    // i_1001=i_10<<2+i_1
+    ecp_sm2z256_ord_sqr_mont(table[i_1001], t, 2);
+    ecp_sm2z256_ord_mul_mont(table[i_1001], table[i_1001], table[i_1]);
+    // t=i_1010=i_101<<1
+    ecp_sm2z256_ord_sqr_mont(t, table[i_101], 1);
+    // i_1011=i_1010+i_1
+    ecp_sm2z256_ord_mul_mont(table[i_1011], t, table[i_1]);
+    // i_1111=i_1010+i_101
+    ecp_sm2z256_ord_mul_mont(table[i_1111], t, table[i_101]);
+    // i_10101=i_1010<<1+i_1
+    ecp_sm2z256_ord_sqr_mont(table[i_10101], t, 1);
     ecp_sm2z256_ord_mul_mont(table[i_10101], table[i_10101], table[i_1]);
-
-    ecp_sm2z256_ord_sqr_mont(table[i_101010], table[i_10101], 1);
-
-    ecp_sm2z256_ord_mul_mont(table[i_101111], table[i_101010], table[i_101]);
-
-    ecp_sm2z256_ord_mul_mont(table[i_x6], table[i_101010], table[i_10101]);
-
-    ecp_sm2z256_ord_sqr_mont(table[i_x8], table[i_x6], 2);
-    ecp_sm2z256_ord_mul_mont(table[i_x8], table[i_x8], table[i_11]);
-
-    ecp_sm2z256_ord_sqr_mont(table[i_x16], table[i_x8], 8);
-    ecp_sm2z256_ord_mul_mont(table[i_x16], table[i_x16], table[i_x8]);
-
-    ecp_sm2z256_ord_sqr_mont(table[i_x32], table[i_x16], 16);
-    ecp_sm2z256_ord_mul_mont(table[i_x32], table[i_x32], table[i_x16]);
+    // i_11111=i_10101+i_1010
+    ecp_sm2z256_ord_mul_mont(table[i_11111], table[i_10101], t);
+    // t=i_101010=i_10101<<1
+    ecp_sm2z256_ord_sqr_mont(t, table[i_10101], 1);
+    // t=x6=i_101010+i_10101
+    ecp_sm2z256_ord_mul_mont(t, t, table[i_10101]);
+    // out=x8=x6<<2+i_11
+    ecp_sm2z256_ord_sqr_mont(out, t, 2);
+    ecp_sm2z256_ord_mul_mont(out, out, table[i_11]);
+    // i_x31=x16=x8<<8+x8
+    ecp_sm2z256_ord_sqr_mont(table[i_x31], out, 8);
+    ecp_sm2z256_ord_mul_mont(table[i_x31], table[i_x31], out);
+    // i_x32=x24=x16<<8+x8
+    ecp_sm2z256_ord_sqr_mont(table[i_x32], table[i_x31], 8);
+    ecp_sm2z256_ord_mul_mont(table[i_x32], table[i_x32], out);
+    // out=x30=x24<<6+x6
+    ecp_sm2z256_ord_sqr_mont(out, table[i_x32], 6);
+    ecp_sm2z256_ord_mul_mont(out, out, t);
+    // i_x31=x30<<1+i_1
+    ecp_sm2z256_ord_sqr_mont(table[i_x31], out, 1);
+    ecp_sm2z256_ord_mul_mont(table[i_x31], table[i_x31], table[i_1]);
+    // i_x32=i_x31<<1+i_1
+    ecp_sm2z256_ord_sqr_mont(table[i_x32], table[i_x31], 1);
+    ecp_sm2z256_ord_mul_mont(table[i_x32], table[i_x32], table[i_1]);
 
     /* calculations */
-    ecp_sm2z256_ord_sqr_mont(out, table[i_x32], 64);
+    ecp_sm2z256_ord_sqr_mont(out, table[i_x31], 33);
     ecp_sm2z256_ord_mul_mont(out, out, table[i_x32]);
 
-    for (i = 0; i < 27; i++) {
+    for (i = 0; i < 25; i++) {
         static const struct { unsigned char p, i; } chain[27] = {
-            { 32, i_x32 }, { 6,  i_101111 }, { 5,  i_111    },
-            { 4,  i_11  }, { 5,  i_1111   }, { 5,  i_10101  },
-            { 4,  i_101 }, { 3,  i_101    }, { 3,  i_101    },
-            { 5,  i_111 }, { 9,  i_101111 }, { 6,  i_1111   },
-            { 2,  i_1   }, { 5,  i_1      }, { 6,  i_1111   },
-            { 5,  i_111 }, { 4,  i_111    }, { 5,  i_111    },
-            { 5,  i_101 }, { 3,  i_11     }, { 10, i_101111 },
-            { 2,  i_11  }, { 5,  i_11     }, { 5,  i_11     },
-            { 3,  i_1   }, { 7,  i_10101  }, { 6,  i_1111   }
+            { 32, i_x32 }, { 32, i_x32    }, { 4,  i_111    },
+            { 3,  i_1   }, { 11, i_1111   }, { 5,  i_1111   },
+            { 4,  i_1011}, { 5,  i_1011   }, { 3,  i_1      },
+            { 7,  i_111 }, { 5,  i_11     }, { 9,  i_101    },
+            { 7,  i_10101},{ 5,  i_10101  }, { 5,  i_111    },
+            { 4,  i_111 }, { 6,  i_11111  }, { 3,  i_101    },
+            { 10, i_1001}, { 5,  i_111    }, { 5,  i_111    },
+            { 6,  i_10101},{ 2,  i_1      }, { 9,  i_1001   },
+            { 5,  i_1   }
         };
 
         ecp_sm2z256_ord_sqr_mont(out, out, chain[i].p);
         ecp_sm2z256_ord_mul_mont(out, out, table[chain[i].i]);
     }
 #endif
+    // trans to normal field
     ecp_sm2z256_ord_mul_mont(out, out, one);
 
     /*
@@ -1512,7 +1619,7 @@ const EC_METHOD *EC_GFp_sm2z256_method(void)
         ossl_ecdsa_simple_sign_setup,
         ossl_ecdsa_simple_sign_sig,
         ossl_ecdsa_simple_verify_sig,
-        0,                   /* can be #define-d NULL */
+        ecp_sm2z256_inv_mod_ord,                    /* can be #define-d NULL */
         0,                                          /* blind_coordinates */
         0,                                          /* ladder_pre */
         0,                                          /* ladder_step */

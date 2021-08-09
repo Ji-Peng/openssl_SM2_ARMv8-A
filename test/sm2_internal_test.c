@@ -40,6 +40,7 @@ static uint8_t *fake_rand_bytes = NULL;
 static size_t fake_rand_bytes_offset = 0;
 static size_t fake_rand_size = 0;
 
+#define TESTS 0x7fff
 // copy frm aarch64-linux-gnu/bits/signum-generic.h
 #define	SIGALRM		14	/* Alarm clock.  */
 
@@ -477,8 +478,7 @@ static int speed_sm2_sign(const EC_GROUP *group,
     start_fake_rand(k_hex);
     run = 1;
     Time_F(START);
-    // 0x7fffffff
-    for(count = 0; run && (count < 0x7ffff); count++){
+    for(count = 0; run && (count < TESTS); count++){
         sig = ossl_sm2_do_sign(key, EVP_sm3(), (const uint8_t *)userid,
                            strlen(userid), (const uint8_t *)message, msg_len);
     }
@@ -504,8 +504,7 @@ static int speed_sm2_sign(const EC_GROUP *group,
     //     goto done;
     d = 0.0;
     Time_F(START);
-    // 0x7fffffff
-    for(count = 0; run && (count < 0x7ffff); count++){
+    for(count = 0; run && (count < TESTS); count++){
     ok = ossl_sm2_do_verify(key, EVP_sm3(), sig, (const uint8_t *)userid,
                             strlen(userid), (const uint8_t *)message, msg_len);
     }
