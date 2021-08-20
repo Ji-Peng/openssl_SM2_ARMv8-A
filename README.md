@@ -1,6 +1,8 @@
 Welcome to the OpenSSL Project
 ==============================
 
+Test SM2: make && ./test/sm2_internal_test
+
 [![openssl logo]][www.openssl.org]
 
 [![github actions ci badge]][github actions ci]

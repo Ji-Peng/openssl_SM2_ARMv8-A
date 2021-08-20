@@ -25,14 +25,22 @@
 #include <openssl/bn.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
+#include <openssl/ec.h>
 #include <openssl/rand.h>
 #include "testutil.h"
+#include "../crypto/ec/ec_local.h"
+#include "../crypto/bn/bn_local.h"
 
 #ifndef OPENSSL_NO_SM2
 
 # include "crypto/sm2.h"
 
-
+int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp,
+                const BN_ULONG *np, const BN_ULONG *n0p, int num);
+/* Montgomery mul: res = a*b*2^-256 mod P */
+void ecp_sm2z256_mul_mont(BN_ULONG res[4],
+                           const BN_ULONG a[4],
+                           const BN_ULONG b[4]);
 static fake_random_generate_cb get_faked_bytes;
 
 static OSSL_PROVIDER *fake_rand = NULL;
@@ -40,7 +48,7 @@ static uint8_t *fake_rand_bytes = NULL;
 static size_t fake_rand_bytes_offset = 0;
 static size_t fake_rand_size = 0;
 
-#define TESTS 0x7fff
+#define TESTS 0x7ff
 // copy frm aarch64-linux-gnu/bits/signum-generic.h
 #define	SIGALRM		14	/* Alarm clock.  */
 
@@ -55,6 +63,7 @@ static double Time_F(int s);
 # include <sys/times.h>
 # define TM_START        0
 # define TM_STOP         1
+
 double app_tminterval(int stop, int usertime)
 {
     double ret = 0;
@@ -451,15 +460,29 @@ static int speed_sm2_sign(const EC_GROUP *group,
     EC_POINT *pt = NULL;
     EC_KEY *key = NULL;
     ECDSA_SIG *sig = NULL;
+    BN_MONT_CTX *mont;
     double d = 0.0;
+    BN_ULONG res[4] = {0x0000000000000001ull, 0x00000000ffffffffull, 0x0000000000000000ull, 0x100000000ull};
+    BN_ULONG a[4] = {0xFFFFFFFFFFFFFFFEull, 0xFFFFFFFF00000001ull, 0xFFFFFFFFFFFFFFFEull, 0xFFFFFFFEFFFFFFFEull};
+    BN_ULONG b[4] = {0xFFFFFFFFFFFFFFFDull, 0xFFFFFFFF00000000ull, 0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFEFFFFFFFFull};
+    static int test_functions = 1;
+    BIGNUM *big_r = NULL;
+    BIGNUM *big_a = NULL;
     // const BIGNUM *sig_r = NULL;
     // const BIGNUM *sig_s = NULL;
     // BIGNUM *r = NULL;
     // BIGNUM *s = NULL;
+    BN_CTX *ctx = NULL;
+
+
 #if SIGALRM > 0
     signal(SIGALRM, alarmed);
 #endif
 
+    mont = group->field_data1;
+    if (mont == NULL)
+        goto done;
+    
     if (!TEST_true(BN_hex2bn(&priv, privkey_hex)))
         goto done;
 
@@ -469,6 +492,18 @@ static int speed_sm2_sign(const EC_GROUP *group,
             || !TEST_true(EC_KEY_set_private_key(key, priv)))
         goto done;
 
+    ctx = BN_CTX_new_ex(ossl_ec_key_get_libctx(key));
+    if (ctx == NULL) {
+        ERR_raise(ERR_LIB_SM2, ERR_R_MALLOC_FAILURE);
+        goto done;
+    }
+
+    if ((big_r = BN_CTX_get(ctx)) == NULL 
+        || (big_a = BN_CTX_get(ctx)) == NULL) {
+            ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
+            goto done;
+        }
+
     pt = EC_POINT_new(group);
     if (!TEST_ptr(pt)
             || !TEST_true(EC_POINT_mul(group, pt, priv, NULL, NULL, NULL))
@@ -477,18 +512,60 @@ static int speed_sm2_sign(const EC_GROUP *group,
 
     start_fake_rand(k_hex);
     run = 1;
+
+#if 1
+        #define FUNCTION_TESTS 0x7fffffff
+        // d = 0.0;
+        // bn_set_words(big_a, a, 4);
+        // Time_F(START);
+        // for(count = 0; run && (count < FUNCTION_TESTS); count++){
+        //     // group->meth->field_inv(group, big_r, big_a, ctx);
+        // }
+        // d = Time_F(STOP);
+        // BIO_printf(bio_err, "%ld invert in %.2fs \n", count, d);
+        // BIO_printf(bio_err, "%8.1f invert/s\n", (double)count / d);
+
+    if (test_functions == 1){
+        d = 0.0;
+        Time_F(START);
+        for(count = 0; run && (count < FUNCTION_TESTS); count++){
+            bn_mul_mont(res, a, b, mont->N.d, mont->n0, mont->N.top);
+        }
+        d = Time_F(STOP);
+        BIO_printf(bio_err, "%ld bn_mul_mont in %.2fs \n", count, d);
+        BIO_printf(bio_err, "%8.1f bn_mul_mont/s\n", (double)count / d);
+
+        d = 0.0;
+        Time_F(START);
+        for(count = 0; run && (count < FUNCTION_TESTS); count++){
+            ecp_sm2z256_mul_mont(res, a, b);
+        }
+        d = Time_F(STOP);
+        BIO_printf(bio_err, "%ld ecp_sm2z256_mul_mont in %.2fs \n", count, d);
+        BIO_printf(bio_err, "%8.1f ecp_sm2z256_mul_mont/s\n", (double)count / d);
+
+
+
+
+        test_functions = 0;
+    }
+
+#endif
+
+    d = 0.0;
     Time_F(START);
     for(count = 0; run && (count < TESTS); count++){
         sig = ossl_sm2_do_sign(key, EVP_sm3(), (const uint8_t *)userid,
                            strlen(userid), (const uint8_t *)message, msg_len);
     }
     d = Time_F(STOP);
-
     BIO_printf(bio_err,
                 "%ld %u bits %s signs in %.2fs \n",
                 count, 256,
                 "SM2", d);
     BIO_printf(bio_err, "%8.1f sign/s\n", (double)count / d);
+
+
     if (!TEST_ptr(sig)) {
         restore_rand();
         goto done;
@@ -523,8 +600,11 @@ static int speed_sm2_sign(const EC_GROUP *group,
     EC_POINT_free(pt);
     EC_KEY_free(key);
     BN_free(priv);
+    BN_CTX_free(ctx);
     // BN_free(r);
     // BN_free(s);
+    // BN_free(big_r);
+    // BN_free(big_a);
 
     return ok;
 }

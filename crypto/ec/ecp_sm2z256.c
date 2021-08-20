@@ -137,15 +137,34 @@ static unsigned int _booth_recode_w5(unsigned int in)
     return (d << 1) + (s & 1);
 }
 
+/* 
+ * the LSB of the returned value is sign bit, remaining is absoluate value
+ * give two examples for understanding this function
+ * e1: value = 0x78 = 120, in = value<<1 = 0xf0 return: sign = 1, value = 8 i.e. -8
+ * e2: value = 0x7, in = value<<1 = 0x0e return: sign = 0, value = 0x7 i.e. +7
+ * 
+ * How to understand this function from the perspective of the encoding of scalar?
+ * Suppose the 14-bit scalar is: 
+ * s_13 s_12 s_11 s_10 s_9 s_8 s_7 s_6 s_5 s_4 s_3 s_2 s_1 s_0 = 
+ * 0    0    0    0    1   1   1   1   1   1   1   0   0   0   =
+ * 0x07                            0x78                        =
+ * 7*(2^7)         +               120                         = 1016
+ * 1-th call: in = (s_6 s_5 ... s_0 0) = 0x78<<1, return: value = 8, sign = 1, i.e. -8
+ * 2-th call: in = (s_12 s_11 ... s_6) = 0x0f, return: value = 0x8, sign = 0, i.e. +8
+ * 3-th call: in = (0 0 ...0 s_13) = 0x0, return: value = 0, sign = 0, i.e. +0 
+ * now the scalar is:
+ * 8*(2^7) - 8 = 1016
+ * 
+ * if we use the original encoding method, we have to pre-compute 128 points;
+ * if we use the booth encoding method, we can only pre-compute 64 points.
+ */
 static unsigned int _booth_recode_w7(unsigned int in)
 {
     unsigned int s, d;
-
     s = ~((in >> 7) - 1);
     d = (1 << 8) - in - 1;
     d = (d & s) | (in & ~s);
     d = (d >> 1) + (d & 1);
-
     return (d << 1) + (s & 1);
 }
 
@@ -605,47 +624,52 @@ static void ecp_sm2z256_mod_inverse_sqr(BN_ULONG r[P256_LIMBS],
     BN_ULONG x32[P256_LIMBS];
     // don't change them
     #define x1 in
-    #define x2 x32
-    #define x3 r
+    #define x2 x30
+    #define x4 x32
+    #define x6 xtp
+    #define x12 x30
+    #define x24 x32
     #define x31 r
     int i;
     // construct x30, 31, x32
     // x2=x1<<1+x1
     ecp_sm2z256_sqr_mont(x2, x1);
     ecp_sm2z256_mul_mont(x2, x2, x1);
-    // x3=x2<<1+x1
-    ecp_sm2z256_sqr_mont(x3, x2);
-    ecp_sm2z256_mul_mont(x3, x3, x1);
-    // x6=x3<<3+x3
-    ecp_sm2z256_sqr_mont(xtp, x3);
-    for(i = 0; i < 2; i++)
-        ecp_sm2z256_sqr_mont(xtp, xtp);
-    ecp_sm2z256_mul_mont(xtp, xtp, x3);
+    // x4=x2<<2+x2
+    ecp_sm2z256_sqr_mont(x4, x2);
+    ecp_sm2z256_sqr_mont(x4, x4);
+    ecp_sm2z256_mul_mont(x4, x4, x2);
+    // x6=x4<<2+x2
+    ecp_sm2z256_sqr_mont(x6, x4);
+    ecp_sm2z256_sqr_mont(x6, x6);
+    ecp_sm2z256_mul_mont(x6, x6, x2);
     // x12=x6<<6+x6
-    ecp_sm2z256_sqr_mont(x30, xtp);
+    ecp_sm2z256_sqr_mont(x12, x6);
+    for(i = 0; i < 5; i++)
+        ecp_sm2z256_sqr_mont(x12, x12);
+    ecp_sm2z256_mul_mont(x12, x12, x6);
+    // x24=x12<<12+x12
+    ecp_sm2z256_sqr_mont(x24, x12);
+    for(i = 0; i < 11; i++)
+        ecp_sm2z256_sqr_mont(x24, x24);
+    ecp_sm2z256_mul_mont(x24, x24, x12);
+    // x30=x24<<6+x6
+    ecp_sm2z256_sqr_mont(x30, x32);
     for(i = 0; i < 5; i++)
         ecp_sm2z256_sqr_mont(x30, x30);
-    ecp_sm2z256_mul_mont(xtp, xtp, x30);
-    // x15=x12<<3+x3
-    ecp_sm2z256_sqr_mont(x30, xtp);
-    for(i = 0; i < 2; i++)
-        ecp_sm2z256_sqr_mont(x30, x30);
-    ecp_sm2z256_mul_mont(xtp, x30, x3);
-    // x30=x15<<15+x15
-    ecp_sm2z256_sqr_mont(x30, xtp);
-    for(i = 0; i < 14; i++)
-        ecp_sm2z256_sqr_mont(x30, x30);
-    ecp_sm2z256_mul_mont(x30, x30, xtp);
+    ecp_sm2z256_mul_mont(x30, x30, x6);
     // x31=x30<<1+x1
     ecp_sm2z256_sqr_mont(x31, x30);
     ecp_sm2z256_mul_mont(x31, x31, x1);
     // x32=x30<<2+x2
-    ecp_sm2z256_sqr_mont(xtp, x30);
-    ecp_sm2z256_sqr_mont(xtp, xtp);
-    ecp_sm2z256_mul_mont(x32, xtp, x2);
+    ecp_sm2z256_sqr_mont(x32, x31);
+    ecp_sm2z256_mul_mont(x32, x32, x1);
     #undef x1
     #undef x2
-    #undef x3
+    #undef x4
+    #undef x6
+    #undef x12
+    #undef x24
     // x31<<33+x32
     for(i = 0; i < 33; i++)
         ecp_sm2z256_sqr_mont(x31, x31);
@@ -1042,7 +1066,7 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
     const EC_POINT **new_points = NULL;
     unsigned int idx = 0;
     const unsigned int window_size = 7;
-    // 2^8 - 1
+    // 2^8 - 1 = 0xff
     const unsigned int mask = (1 << (window_size + 1)) - 1;
     unsigned int wvalue;
     ALIGN32 union {
@@ -1115,8 +1139,12 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
                 }
                 scalar = tmp_scalar;
             }
-
+            // for sm2, bn_get_top(scalar) returns 4, BN_BYTES = 8 on 64-bit machine
+            // 256-bit scalar == 4 * 8 Bytes == 4 * BN_BYTES Bytes == 32 Bytes
+            // i = 0, 8, 16, 24
+            // this loop set 32 byte-pointer points to 32 Bytes of 256-bit scalar
             for (i = 0; i < bn_get_top(scalar) * BN_BYTES; i += BN_BYTES) {
+                // i-th word of scalar
                 BN_ULONG d = bn_get_words(scalar)[i / BN_BYTES];
 
                 p_str[i + 0] = (unsigned char)d;
@@ -1135,7 +1163,7 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
             for (; i < 33; i++)
                 p_str[i] = 0;
 
-            /* First window */
+            /* First 7-bit window */
             wvalue = (p_str[0] << 1) & mask;
             idx += window_size;
 

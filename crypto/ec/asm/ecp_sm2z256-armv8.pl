@@ -2008,8 +2008,8 @@ ecp_sm2z256_scatter_w7:
 	ret
 .size	ecp_sm2z256_scatter_w7,.-ecp_sm2z256_scatter_w7
 
-// void	ecp_sm2z256_gather_w7(P256_POINT_AFFINE *x0,const void *x1,
-//						     int x2);
+// void ecp_sm2z256_gather_w7(P256_POINT_AFFINE *val,
+//                            const P256_POINT_AFFINE *in_t, int idx);
 .globl	ecp_sm2z256_gather_w7
 .type	ecp_sm2z256_gather_w7,%function
 .align	4
@@ -2018,14 +2018,27 @@ ecp_sm2z256_gather_w7:
 	add	x29,sp,#0
 
 	cmp	$index,xzr
+	// Conditional Set Mask sets all bits of the destination register to 1
+	// if the condition is TRUE, and otherwise sets all bits to 0.
+	// i.e. if $index!=0 then x3=0xff...ff
 	csetm	x3,ne
+	// if $index=1, $index=1+0xff...ff=0
 	add	$index,$index,x3
+	// if $index=1 $inp=$inp+1
 	add	$inp,$inp,$index
+	// $index = 8, loop repeats 8 times
 	mov	$index,#64/8
 	nop
+// ldrb: load a byte with zero-extended
+// prfm pldl1strm, pld: prefetch for load; l1: level 1 cache; 
+// strm: for data that is used only once
+// this loop loads 8 bytes = 1 64-bit from [$inp,#64*0]-[$inp,#64*7] each time
+// this loop loads 8*64-bit overall
+// prefetch for load [#4096+64*0]-[#4096+64*7]
 .Loop_gather_w7:
 	ldrb	w4,[$inp,#64*0]
 	prfm	pldl1strm,[$inp,#4096+64*0]
+	// loop control
 	subs	$index,$index,#1
 	ldrb	w5,[$inp,#64*1]
 	prfm	pldl1strm,[$inp,#4096+64*1]
@@ -2041,7 +2054,9 @@ ecp_sm2z256_gather_w7:
 	prfm	pldl1strm,[$inp,#4096+64*6]
 	ldrb	w11,[$inp,#64*7]
 	prfm	pldl1strm,[$inp,#4096+64*7]
+	// $inp+=512
 	add	$inp,$inp,#64*8
+	// concat 8 8-bit into 1 64-bit 
 	orr	x4,x4,x5,lsl#8
 	orr	x6,x6,x7,lsl#8
 	orr	x8,x8,x9,lsl#8
@@ -2049,7 +2064,9 @@ ecp_sm2z256_gather_w7:
 	orr	x10,x10,x11,lsl#8
 	orr	x4,x4,x8,lsl#32
 	orr	x4,x4,x10,lsl#48
+	// if $index=0, output=0
 	and	x4,x4,x3
+	// store the 64-bit value
 	str	x4,[$out],#8
 	b.ne	.Loop_gather_w7
 
