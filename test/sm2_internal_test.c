@@ -48,7 +48,7 @@ static uint8_t *fake_rand_bytes = NULL;
 static size_t fake_rand_bytes_offset = 0;
 static size_t fake_rand_size = 0;
 
-#define TESTS 0x7ff
+#define TESTS 0x7fffff
 // copy frm aarch64-linux-gnu/bits/signum-generic.h
 #define	SIGALRM		14	/* Alarm clock.  */
 
@@ -269,6 +269,7 @@ static int test_sm2_crypt(const EC_GROUP *group,
     uint8_t *recovered = NULL;
     size_t recovered_len = msg_len;
     int rc = 0;
+    int i;
 
     if (!TEST_true(BN_hex2bn(&priv, privkey_hex)))
         goto done;
@@ -298,6 +299,11 @@ static int test_sm2_crypt(const EC_GROUP *group,
         restore_rand();
         goto done;
     }
+    // BIO_printf(bio_err, "%s\n", ctext);
+    for (i=0; i<ctext_len; i++){
+        BIO_printf(bio_err, "%02x", ctext[i]);
+    }
+    BIO_printf(bio_err, "\n");
     restore_rand();
 
     // if (!TEST_mem_eq(ctext, ctext_len, expected, ctext_len))
@@ -306,7 +312,8 @@ static int test_sm2_crypt(const EC_GROUP *group,
     if (!TEST_true(ossl_sm2_plaintext_size(key, digest, ctext_len, &ptext_len))
             || !TEST_int_eq(ptext_len, msg_len))
         goto done;
-
+    // BIO_printf(bio_err, "msg_len: %ld, field_size: %ld, md_size: %ld\n", ctext_len, ec_field_size(EC_KEY_get0_group(key)), EVP_MD_get_size(digest));
+    BIO_printf(bio_err, "msg_len: %ld, ptext_len: %ld\n", ctext_len, ptext_len);
     recovered = OPENSSL_zalloc(ptext_len);
     if (!TEST_ptr(recovered)
             || !TEST_true(ossl_sm2_decrypt(key, digest, ctext, ctext_len,
@@ -357,19 +364,19 @@ static int sm2_crypt_test(void)
         goto done;
 
     /* Same test as above except using SHA-256 instead of SM3 */
-    if (!test_sm2_crypt(
-            test_group,
-            EVP_sha256(),
-            "1649AB77A00637BD5E2EFE283FBF353534AA7F7CB89463F208DDBC2920BB0DA0",
-            "encryption standard",
-            "004C62EEFD6ECFC2B95B92FD6C3D9575148AFA17425546D49018E5388D49DD7B4F"
-            "003da18008784352192d70f22c26c243174a447ba272fec64163dd4742bae8bc98"
-            "00df17605cf304e9dd1dfeb90c015e93b393a6f046792f790a6fa4228af67d9588",
-            "307B0220245C26FB68B1DDDDB12C4B6BF9F2B6D5FE60A383B0D18D1C4144ABF17F"
-            "6252E7022076CB9264C2A7E88E52B19903FDC47378F605E36811F5C07423A24B84"
-            "400F01B80420BE89139D07853100EFA763F60CBE30099EA3DF7F8F364F9D10A5E9"
-            "88E3C5AAFC0413229E6C9AEE2BB92CAD649FE2C035689785DA33"))
-        goto done;
+    // if (!test_sm2_crypt(
+    //         test_group,
+    //         EVP_sha256(),
+    //         "1649AB77A00637BD5E2EFE283FBF353534AA7F7CB89463F208DDBC2920BB0DA0",
+    //         "encryption standard",
+    //         "004C62EEFD6ECFC2B95B92FD6C3D9575148AFA17425546D49018E5388D49DD7B4F"
+    //         "003da18008784352192d70f22c26c243174a447ba272fec64163dd4742bae8bc98"
+    //         "00df17605cf304e9dd1dfeb90c015e93b393a6f046792f790a6fa4228af67d9588",
+    //         "307B0220245C26FB68B1DDDDB12C4B6BF9F2B6D5FE60A383B0D18D1C4144ABF17F"
+    //         "6252E7022076CB9264C2A7E88E52B19903FDC47378F605E36811F5C07423A24B84"
+    //         "400F01B80420BE89139D07853100EFA763F60CBE30099EA3DF7F8F364F9D10A5E9"
+    //         "88E3C5AAFC0413229E6C9AEE2BB92CAD649FE2C035689785DA33"))
+    //     goto done;
 
     testresult = 1;
  done:
@@ -689,7 +696,7 @@ int setup_tests(void)
         return 0;
 
     ADD_TEST(sm2_crypt_test);
-    ADD_TEST(sm2_sig_test);
+    // ADD_TEST(sm2_sig_test);
 #endif
     return 1;
 }
