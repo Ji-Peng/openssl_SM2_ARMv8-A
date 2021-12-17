@@ -49,6 +49,7 @@ static size_t fake_rand_bytes_offset = 0;
 static size_t fake_rand_size = 0;
 
 #define TESTS 0x7fffff
+#define FUNCTION_TESTS 0x7fffffff
 // copy frm aarch64-linux-gnu/bits/signum-generic.h
 #define	SIGALRM		14	/* Alarm clock.  */
 
@@ -521,7 +522,6 @@ static int speed_sm2_sign(const EC_GROUP *group,
     run = 1;
 
 #if 1
-        #define FUNCTION_TESTS 0x7fffffff
         // d = 0.0;
         // bn_set_words(big_a, a, 4);
         // Time_F(START);
@@ -696,7 +696,7 @@ int setup_tests(void)
         return 0;
 
     ADD_TEST(sm2_crypt_test);
-    // ADD_TEST(sm2_sig_test);
+    ADD_TEST(sm2_sig_test);
 #endif
     return 1;
 }

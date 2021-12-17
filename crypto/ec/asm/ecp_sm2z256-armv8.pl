@@ -1906,6 +1906,25 @@ ecp_sm2z256_scatter_w5:
 	ret
 .size	ecp_sm2z256_scatter_w5,.-ecp_sm2z256_scatter_w5
 
+// void	ecp_sm2z256_scatter_w5_neon(void *x0,const P256_POINT *x1,
+//					 int x2);
+.globl	ecp_sm2z256_scatter_w5_neon
+.type	ecp_sm2z256_scatter_w5_neon,%function
+.align	4
+ecp_sm2z256_scatter_w5_neon:
+	// 1 point = 3 * 32B = 6 vectors
+	ld1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$inp], 64
+	// $index = ($index - 1) * 3 * 32
+	sub $index, $index, 1
+	add $index, $index, $index, lsl 1	// $index = $index + $index<<1
+	lsl $index, $index, 5
+	ld1 {v4.2d, v5.2d}, [$inp]
+	add $out, $out, $index
+	st1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$out], 64
+	st1 {v4.2d, v5.2d}, [$out]
+	ret
+.size	ecp_sm2z256_scatter_w5_neon,.-ecp_sm2z256_scatter_w5_neon
+
 // void	ecp_sm2z256_gather_w5(P256_POINT *x0,const void *x1,
 //					      int x2);
 .globl	ecp_sm2z256_gather_w5
@@ -1982,6 +2001,120 @@ ecp_sm2z256_gather_w5:
 	ldr	x29,[sp],#16
 	ret
 .size	ecp_sm2z256_gather_w5,.-ecp_sm2z256_gather_w5
+
+// void	ecp_sm2z256_gather_w5_neon(P256_POINT *x0,const void *x1,
+//					      int x2);
+// v0: 4; v1: index (int idx);
+// v2, v3, v4: 1+4i, 2+4i, 3+4i;
+// v5-v10: results;
+// v11-v13: masks;
+// v14-v31: points value
+.globl	ecp_sm2z256_gather_w5_neon
+.type	ecp_sm2z256_gather_w5_neon,%function
+.align	4
+ecp_sm2z256_gather_w5_neon:
+	// each 64-bit items is 3
+	movi	v0.4s, 3
+	// index
+	dup	v1.4s, w2
+	// each 32-bit items is 1+3i/2+3i/3+3i
+	movi	v2.4s, 1
+	movi	v3.4s, 2
+	movi	v4.4s, 3
+	// clear v5-v10 for saving results
+	eor	v5.16b, v5.16b, v5.16b
+	eor	v6.16b, v6.16b, v6.16b
+	eor	v7.16b, v7.16b, v7.16b
+	eor	v8.16b, v8.16b, v8.16b
+	eor	v9.16b, v9.16b, v9.16b
+	eor	v10.16b, v10.16b, v10.16b
+	// for (i = 0; i < 5; i++) each loop scan three points
+	mov	x3, 5
+.Loop_gather_w5_neon:
+	// load 3 points, 6 vectors can accommodate 1 points
+	ld1	{v14.2d, v15.2d, v16.2d, v17.2d}, [x1], 64
+	ld1	{v18.2d, v19.2d, v20.2d, v21.2d}, [x1], 64
+	ld1	{v22.2d, v23.2d, v24.2d, v25.2d}, [x1], 64
+	ld1	{v26.2d, v27.2d, v28.2d, v29.2d}, [x1], 64
+	ld1 {v30.2d, v31.2d}, [x1], 32
+	// generate masks according to index
+	cmeq	v11.4s, v2.4s, v1.4s
+	cmeq	v12.4s, v3.4s, v1.4s
+	cmeq	v13.4s, v4.4s, v1.4s
+	// add 3 for each items of v2-v4
+	add	v2.4s, v2.4s, v0.4s
+	add	v3.4s, v3.4s, v0.4s
+	add	v4.4s, v4.4s, v0.4s
+	// point AND with masks for getting the point we want
+	and	v14.16b, v14.16b, v11.16b
+	and	v15.16b, v15.16b, v11.16b
+	and	v16.16b, v16.16b, v11.16b
+	and	v17.16b, v17.16b, v11.16b
+	and	v18.16b, v18.16b, v11.16b
+	and	v19.16b, v19.16b, v11.16b
+
+	and	v20.16b, v20.16b, v12.16b
+	and	v21.16b, v21.16b, v12.16b
+	and	v22.16b, v22.16b, v12.16b
+	and	v23.16b, v23.16b, v12.16b
+	and	v24.16b, v24.16b, v12.16b
+	and	v25.16b, v25.16b, v12.16b
+
+	and	v26.16b, v26.16b, v13.16b
+	and	v27.16b, v27.16b, v13.16b
+	and	v28.16b, v28.16b, v13.16b
+	and	v29.16b, v29.16b, v13.16b
+	and	v30.16b, v30.16b, v13.16b
+	and	v31.16b, v31.16b, v13.16b
+
+	// masked_point XOR with results for getting final results
+	eor	v5.16b, v5.16b, v14.16b
+	eor	v6.16b, v6.16b, v15.16b
+	eor	v7.16b, v7.16b, v16.16b
+	eor	v8.16b, v8.16b, v17.16b
+	eor	v9.16b, v9.16b, v18.16b
+	eor	v10.16b, v10.16b, v19.16b
+
+	eor	v5.16b, v5.16b, v20.16b
+	eor	v6.16b, v6.16b, v21.16b
+	eor	v7.16b, v7.16b, v22.16b
+	eor	v8.16b, v8.16b, v23.16b
+	eor	v9.16b, v9.16b, v24.16b
+	eor	v10.16b, v10.16b, v25.16b
+
+	eor	v5.16b, v5.16b, v26.16b
+	eor	v6.16b, v6.16b, v27.16b
+	eor	v7.16b, v7.16b, v28.16b
+	eor	v8.16b, v8.16b, v29.16b
+	eor	v9.16b, v9.16b, v30.16b
+	eor	v10.16b, v10.16b, v31.16b
+
+	subs	x3, x3, 1
+	b.ne	.Loop_gather_w5_neon
+
+	// 16-th point
+	ld1	{v14.2d, v15.2d, v16.2d, v17.2d}, [x1], 64
+	ld1 {v18.2d, v19.2d}, [x1], 32
+	// generate masks according to index
+	cmeq	v11.4s, v2.4s, v1.4s
+	// point AND with masks for getting the point we want
+	and	v14.16b, v14.16b, v11.16b
+	and	v15.16b, v15.16b, v11.16b
+	and	v16.16b, v16.16b, v11.16b
+	and	v17.16b, v17.16b, v11.16b
+	and	v18.16b, v18.16b, v11.16b
+	and	v19.16b, v19.16b, v11.16b
+	eor	v5.16b, v5.16b, v14.16b
+	eor	v6.16b, v6.16b, v15.16b
+	eor	v7.16b, v7.16b, v16.16b
+	eor	v8.16b, v8.16b, v17.16b
+	eor	v9.16b, v9.16b, v18.16b
+	eor	v10.16b, v10.16b, v19.16b
+
+	st1	{v5.2d, v6.2d, v7.2d, v8.2d}, [x0], 64
+	st1 {v9.2d, v10.2d}, [x0]
+	ret
+.size	ecp_sm2z256_gather_w5_neon,.-ecp_sm2z256_gather_w5_neon
 
 // void	ecp_sm2z256_scatter_w7(void *x0,const P256_POINT_AFFINE *x1,
 //					 int x2);
@@ -2132,7 +2265,7 @@ ecp_sm2z256_gather_w7_neon:
 	// each 64-bit items is 4
 	movi v0.4s, 4
 	// index
-	dup v1.2d, $index
+	dup v1.4s, w2
 	// each 32-bit items is 1+4i/2+4i/3+4i/4+4i
 	movi v2.4s, 1
 	movi v3.4s, 2

@@ -109,6 +109,10 @@ void ecp_sm2z256_scatter_w5(P256_POINT *val,
                              const P256_POINT *in_t, int idx);
 void ecp_sm2z256_gather_w5(P256_POINT *val,
                             const P256_POINT *in_t, int idx);
+void ecp_sm2z256_scatter_w5_neon(P256_POINT *val,
+                             const P256_POINT *in_t, int idx);
+void ecp_sm2z256_gather_w5_neon(P256_POINT *val,
+                            const P256_POINT *in_t, int idx);
 void ecp_sm2z256_scatter_w7(P256_POINT_AFFINE *val,
                              const P256_POINT_AFFINE *in_t, int idx);
 void ecp_sm2z256_scatter_w7_neon(P256_POINT_AFFINE *val,
@@ -119,6 +123,9 @@ void ecp_sm2z256_gather_w7_neon(P256_POINT_AFFINE *val,
                             const P256_POINT_AFFINE *in_t, int idx);                            
 #define ecp_sm2z256_scatter_w7 ecp_sm2z256_scatter_w7_neon
 #define ecp_sm2z256_gather_w7 ecp_sm2z256_gather_w7_neon
+
+#define ecp_sm2z256_scatter_w5 ecp_sm2z256_scatter_w5_neon
+#define ecp_sm2z256_gather_w5 ecp_sm2z256_gather_w5_neon
 /* One converted into the Montgomery domain */
 static const BN_ULONG ONE[P256_LIMBS] = {
     TOBN(0x00000000, 0x00000001), TOBN(0x00000000, 0xffffffff),
