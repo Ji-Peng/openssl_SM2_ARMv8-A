@@ -111,8 +111,14 @@ void ecp_sm2z256_gather_w5(P256_POINT *val,
                             const P256_POINT *in_t, int idx);
 void ecp_sm2z256_scatter_w7(P256_POINT_AFFINE *val,
                              const P256_POINT_AFFINE *in_t, int idx);
+void ecp_sm2z256_scatter_w7_neon(P256_POINT_AFFINE *val,
+                             const P256_POINT_AFFINE *in_t, int idx);
 void ecp_sm2z256_gather_w7(P256_POINT_AFFINE *val,
                             const P256_POINT_AFFINE *in_t, int idx);
+void ecp_sm2z256_gather_w7_neon(P256_POINT_AFFINE *val,
+                            const P256_POINT_AFFINE *in_t, int idx);                            
+#define ecp_sm2z256_scatter_w7 ecp_sm2z256_scatter_w7_neon
+#define ecp_sm2z256_gather_w7 ecp_sm2z256_gather_w7_neon
 /* One converted into the Montgomery domain */
 static const BN_ULONG ONE[P256_LIMBS] = {
     TOBN(0x00000000, 0x00000001), TOBN(0x00000000, 0xffffffff),
@@ -145,10 +151,10 @@ static unsigned int _booth_recode_w5(unsigned int in)
  * 
  * How to understand this function from the perspective of the encoding of scalar?
  * Suppose the 14-bit scalar is: 
- * s_13 s_12 s_11 s_10 s_9 s_8 s_7 s_6 s_5 s_4 s_3 s_2 s_1 s_0 = 
- * 0    0    0    0    1   1   1   1   1   1   1   0   0   0   =
- * 0x07                            0x78                        =
- * 7*(2^7)         +               120                         = 1016
+ * s_13 s_12 s_11 s_10 s_9 s_8 s_7 | s_6 s_5 s_4 s_3 s_2 s_1 s_0 = 
+ * 0    0    0    0    1   1   1   | 1   1   1   1   0   0   0   =
+ * 0x07                            | 0x78                        =
+ * 7*(2^7)         +               | 120                         = 1016
  * 1-th call: in = (s_6 s_5 ... s_0 0) = 0x78<<1, return: value = 8, sign = 1, i.e. -8
  * 2-th call: in = (s_12 s_11 ... s_6) = 0x0f, return: value = 0x8, sign = 0, i.e. +8
  * 3-th call: in = (0 0 ...0 s_13) = 0x0, return: value = 0, sign = 0, i.e. +0 
@@ -986,9 +992,15 @@ __owur static int ecp_sm2z256_mult_precompute(EC_GROUP *group, BN_CTX *ctx)
     if (!EC_POINT_copy(T, generator))
         goto err;
 
+    // each sub-table has 64 points
+    // if we smashes precompute-table (preComputedTable[j]+k) is the address
+    // where k-th point's first byte of the sub-table will be stored
+    // if we don't smashes precompute-table (preComputedTable[j]+k*64) is the address
+    // where k-th point of the sub-table will be stored
     for (k = 0; k < 64; k++) {
         if (!EC_POINT_copy(P, T))
             goto err;
+        // there are 37 sub-tables
         for (j = 0; j < 37; j++) {
             P256_POINT_AFFINE temp;
             /*
@@ -1047,8 +1059,18 @@ __owur static int ecp_sm2z256_set_from_affine(EC_POINT *out, const EC_GROUP *gro
     return ret;
 }
 
-/* r = scalar*G + sum(scalars[i]*points[i]) */
 /* num=0, points=NULL, scalars=NULL when computing scalar*G */
+/**
+ * @brief r = scalar*G + sum(scalars[i]*points[i])
+ * 
+ * @param group 包含椭圆曲线运算方法、椭圆曲线参数等信息
+ * @param r 结果
+ * @param scalar 标量
+ * @param num 计算标量乘累加时的标量数量
+ * @param points 计算标量乘累加时的num个点
+ * @param scalars 计算标量乘累加时的num个标量
+ * @param ctx 大整数相关设置的上下文
+ */
 __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
                                           EC_POINT *r,
                                           const BIGNUM *scalar,
@@ -1057,6 +1079,7 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
                                           const BIGNUM *scalars[], BN_CTX *ctx)
 {
     int i = 0, ret = 0, no_precomp_for_generator = 0, p_is_infinity = 0;
+    // p_str[i]指向标量的第i个byte
     unsigned char p_str[33] = { 0 };
     // one row includes 64 points
     const PRECOMP256_ROW *preComputedTable = NULL;
@@ -1065,23 +1088,25 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
     const BIGNUM **new_scalars = NULL;
     const EC_POINT **new_points = NULL;
     unsigned int idx = 0;
+    // 滑动窗口，窗口的大小
     const unsigned int window_size = 7;
     // 2^8 - 1 = 0xff
     const unsigned int mask = (1 << (window_size + 1)) - 1;
     unsigned int wvalue;
     ALIGN32 union {
-        P256_POINT p;
-        P256_POINT_AFFINE a;
+        P256_POINT p;           // including X Y Z
+        P256_POINT_AFFINE a;    // including X Y
     } t, p;
     BIGNUM *tmp_scalar;
 
+    // 检查 num 的合理性
     if ((num + 1) == 0 || (num + 1) > OPENSSL_MALLOC_MAX_NELEMS(void *)) {
         ERR_raise(ERR_LIB_EC, ERR_R_MALLOC_FAILURE);
         return 0;
     }
-
+    // 用于分配空间和debug
     BN_CTX_start(ctx);
-
+    // 计算固定点标量乘
     if (scalar) {
         // get base point
         generator = EC_GROUP_get0_generator(group);
@@ -1089,10 +1114,9 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
             ERR_raise(ERR_LIB_EC, EC_R_UNDEFINED_GENERATOR);
             goto err;
         }
-
+        // 没有走该分支，走的下面的分支
         /* look if we can use precomputed multiples of generator */
         pre_comp = group->pre_comp.sm2z256;
-
         if (pre_comp) {
             /*
              * If there is a precomputed table for the generator, check that
@@ -1114,7 +1138,7 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
 
             EC_POINT_free(pre_comp_generator);
         }
-
+        // 给预计算表赋值
         if (preComputedTable == NULL && ecp_sm2z256_is_affine_G(generator)) {
             /*
              * If there is no precomputed data, but the generator is the
@@ -1124,10 +1148,10 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
              */
             preComputedTable = ecp_sm2z256_precomputed;
         }
-
+        // 使用的是我们硬编码的预计算表
         if (preComputedTable) {
             BN_ULONG infty;
-
+            // 如果标量过长 或 为负数，进行模运算处理
             if ((BN_num_bits(scalar) > 256)
                 || BN_is_negative(scalar)) {
                 if ((tmp_scalar = BN_CTX_get(ctx)) == NULL)
@@ -1142,7 +1166,8 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
             // for sm2, bn_get_top(scalar) returns 4, BN_BYTES = 8 on 64-bit machine
             // 256-bit scalar == 4 * 8 Bytes == 4 * BN_BYTES Bytes == 32 Bytes
             // i = 0, 8, 16, 24
-            // this loop set 32 byte-pointer points to 32 Bytes of 256-bit scalar
+            // this loop set 32-byte word-points to 32 Bytes of 256-bit scalar
+            // p_str[i]指向标量的第i个byte
             for (i = 0; i < bn_get_top(scalar) * BN_BYTES; i += BN_BYTES) {
                 // i-th word of scalar
                 BN_ULONG d = bn_get_words(scalar)[i / BN_BYTES];
@@ -1159,19 +1184,20 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
                     p_str[i + 7] = (unsigned char)(d >> 24);
                 }
             }
-
+            // 标量长256bit = 32*8 bit，后面置0
             for (; i < 33; i++)
                 p_str[i] = 0;
 
             /* First 7-bit window */
+            // 这里左移了一位，是为了booth编码
             wvalue = (p_str[0] << 1) & mask;
             idx += window_size;
-
+            // 对前7bit进行booth编码，wvalue的最低位为符号位、其余位为绝对值
             wvalue = _booth_recode_w7(wvalue);
-
+            // 取预计算点，保存到p中
             ecp_sm2z256_gather_w7(&p.a, preComputedTable[0],
                                    wvalue >> 1);
-
+            // 根据wvalue的符号位决定是否对点的Y值取负
             ecp_sm2z256_neg(p.p.Z, p.p.Y);
             copy_conditional(p.p.Y, p.p.Z, wvalue & 1);
 
@@ -1201,19 +1227,18 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
             }
 
             for (i = 1; i < 37; i++) {
+                // 再次构造booth编码的输入
                 unsigned int off = (idx - 1) / 8;
                 wvalue = p_str[off] | p_str[off + 1] << 8;
                 wvalue = (wvalue >> ((idx - 1) % 8)) & mask;
                 idx += window_size;
-
+                // 计算booth编码，并根据值取预计算表项
                 wvalue = _booth_recode_w7(wvalue);
-
                 ecp_sm2z256_gather_w7(&t.a,
                                        preComputedTable[i], wvalue >> 1);
-
                 ecp_sm2z256_neg(t.p.Z, t.a.Y);
                 copy_conditional(t.a.Y, t.p.Z, wvalue & 1);
-
+                // 预计算表中包含了G^(2^window_size)，无需在此处计算p.p^(2^window_size)
                 ecp_sm2z256_point_add_affine(&p.p, &p.p, &t.a);
             }
         } else {
@@ -1222,7 +1247,7 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
         }
     } else
         p_is_infinity = 1;
-
+    // 对于固定点算法来说，不走该分支
     if (no_precomp_for_generator) {
         /*
          * Without a precomputed table for the generator, it has to be
@@ -1249,7 +1274,7 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
         points = new_points;
         num++;
     }
-
+    // 如果要计算额外的标量乘并累加，则调用ecp_sm2z256_windowed_mul函数
     if (num) {
         P256_POINT *out = &t.p;
         if (p_is_infinity)

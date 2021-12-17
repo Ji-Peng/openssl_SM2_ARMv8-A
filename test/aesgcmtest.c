@@ -153,10 +153,16 @@ static int kat_test(void)
 #define LENGTH 51200
 
     EVP_CIPHER_CTX *ctx = NULL;
-    int outlen, ptlen;
-    unsigned char outbuf[LENGTH];
-    unsigned char pt[LENGTH];
-    unsigned char ct[LENGTH];
+    int outlen, ptlen, ret;
+
+    // unsigned char outbuf[LENGTH];
+    // unsigned char pt[LENGTH];
+    // unsigned char ct[LENGTH];
+
+    unsigned char *outbuf=malloc(LENGTH);
+    unsigned char *pt=malloc(LENGTH);
+    unsigned char *ct=malloc(LENGTH);
+
     double d = 0.0;
     int count = 0;
     Time_F(START);
@@ -170,20 +176,31 @@ static int kat_test(void)
 
     for(count = 0; count < 1000000; count++){
         // EVP_EncryptUpdate(ctx, NULL, &outlen, gcm_aad_512B, sizeof(gcm_aad_512B));
-        EVP_EncryptUpdate(ctx, ct, &ctlen, pt, sizeof(pt));
-        EVP_EncryptFinal_ex(ctx, outbuf, &outlen);
+        ret = EVP_EncryptUpdate(ctx, ct, &ctlen, pt, LENGTH);
+        // if (ret <= 0){
+        //     BIO_printf(bio_err, "ret error\n");
+        //     break;
+        // }
         
         // EVP_DecryptUpdate(ctx, NULL, &outlen, gcm_aad_512B, sizeof(gcm_aad_512B));
         // EVP_DecryptUpdate(ctx, pt, &ptlen, ct, ctlen);
         // EVP_DecryptFinal_ex(ctx, outbuf, &outlen);
     }
     d = Time_F(STOP);
-    BIO_printf(bio_err, "%d AES_256_GCM in %.2fs \n", count, d);
 
-    return do_encrypt(NULL, ct, &ctlen, tag, &taglen)
-        && TEST_mem_eq(gcm_ct, sizeof(gcm_ct), ct, ctlen)
-        && TEST_mem_eq(gcm_tag, sizeof(gcm_tag), tag, taglen)
-        && do_decrypt(gcm_iv, ct, ctlen, tag, taglen);
+    BIO_printf(bio_err, "%d AES_256_GCM in %.2fs \n", count, d);
+    ret = EVP_EncryptFinal_ex(ctx, outbuf, &outlen);
+    if (ret <= 0){
+        BIO_printf(bio_err, "ret error\n");
+    }
+    free(outbuf);
+    free(pt);
+    free(ct);
+    // return do_encrypt(NULL, ct, &ctlen, tag, &taglen)
+    //     && TEST_mem_eq(gcm_ct, sizeof(gcm_ct), ct, ctlen)
+    //     && TEST_mem_eq(gcm_tag, sizeof(gcm_tag), tag, taglen)
+    //     && do_decrypt(gcm_iv, ct, ctlen, tag, taglen);
+    return 1;
 }
 
 static int badkeylen_test(void)

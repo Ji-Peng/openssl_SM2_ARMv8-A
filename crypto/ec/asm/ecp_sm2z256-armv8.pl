@@ -56,23 +56,42 @@ $code.=<<___;
 .align	12
 ecp_sm2z256_precomputed:
 ___
+
+
 ########################################################################
 # this conversion smashes P256_POINT_AFFINE by individual bytes with
 # 64 byte interval, similar to
 #	1111222233334444
 #	1234123412341234
-for(1..37) {
-	@tbl = splice(@arr,0,64*16);
-	for($i=0;$i<64;$i++) {
-		undef @line;
-		for($j=0;$j<64;$j++) {
-			push @line,(@tbl[$j*16+$i/4]>>(($i%4)*8))&0xff;
+if (0) {
+	# there are 37 sub-tables, where each sub-table has 64 points
+	# and each point is 64B (32B for X, 32B for Y)
+	# each item of @arr is 4B, so a sub-table includes 64*64/4=64*16 items
+	for(1..37) {
+		@tbl = splice(@arr,0,64*16);
+		for($i=0;$i<64;$i++) {
+			undef @line;
+			for($j=0;$j<64;$j++) {
+				push @line,(@tbl[$j*16+$i/4]>>(($i%4)*8))&0xff;
+			}
+			$code.=".byte\t";
+			$code.=join(',',map { sprintf "0x%02x",$_} @line);
+			$code.="\n";
 		}
-		$code.=".byte\t";
-		$code.=join(',',map { sprintf "0x%02x",$_} @line);
-		$code.="\n";
 	}
 }
+
+# this conversion does not smashes P256_POINT_AFFINE
+if (1) {
+	# each item of @arr is 4B, 16*4B=64B = 1 point
+	while (@line=splice(@arr,0,16)) {
+		$code.=".word\t";
+		$code.=join(',',map { sprintf "0x%08x",$_} @line);
+		$code.="\n"
+		# print ".word\t",join(',',map { sprintf "0x%08x",$_} @line),"\n";
+	}
+}
+
 $code.=<<___;
 .size	ecp_sm2z256_precomputed,.-ecp_sm2z256_precomputed
 
@@ -1972,10 +1991,13 @@ ecp_sm2z256_gather_w5:
 ecp_sm2z256_scatter_w7:
 	stp	x29,x30,[sp,#-16]!
 	add	x29,sp,#0
-
+	// $out+=$index
 	add	$out,$out,$index
+	// loop num = 8
 	mov	$index,#64/8
+// each loop handle 8B, 1 point = 64B, so loop num = 8
 .Loop_scatter_w7:
+	// load 64-bit from $inp and update $inp
 	ldr	x3,[$inp],#8
 	subs	$index,$index,#1
 	prfm	pstl1strm,[$out,#4096+64*0]
@@ -1986,6 +2008,7 @@ ecp_sm2z256_scatter_w7:
 	prfm	pstl1strm,[$out,#4096+64*5]
 	prfm	pstl1strm,[$out,#4096+64*6]
 	prfm	pstl1strm,[$out,#4096+64*7]
+	// put the i-th Byte
 	strb	w3,[$out,#64*0]
 	lsr	x3,x3,#8
 	strb	w3,[$out,#64*1]
@@ -2007,6 +2030,22 @@ ecp_sm2z256_scatter_w7:
 	ldr	x29,[sp],#16
 	ret
 .size	ecp_sm2z256_scatter_w7,.-ecp_sm2z256_scatter_w7
+
+// void	ecp_sm2z256_scatter_w7_neon(void *x0,const P256_POINT_AFFINE *x1,
+//					 int x2);
+.globl	ecp_sm2z256_scatter_w7_neon
+.type	ecp_sm2z256_scatter_w7_neon,%function
+.align	4
+ecp_sm2z256_scatter_w7_neon:
+	// a point is 64B, a vector is 16B, so a point == 4 vectors
+	// load a point
+	ld1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$inp]
+	// $out+=$index*(2^64)
+	add $out, $out, $index, lsl 6
+	// store a point
+	st1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$out]
+	ret
+.size	ecp_sm2z256_scatter_w7_neon,.-ecp_sm2z256_scatter_w7_neon
 
 // void ecp_sm2z256_gather_w7(P256_POINT_AFFINE *val,
 //                            const P256_POINT_AFFINE *in_t, int idx);
@@ -2074,6 +2113,104 @@ ecp_sm2z256_gather_w7:
 	ret
 .size	ecp_sm2z256_gather_w7,.-ecp_sm2z256_gather_w7
 ___
+}
+
+{
+my ($out,$inp,$index)=map("x$_",(0..2));
+$code.=<<___;
+// void ecp_sm2z256_gather_w7_neon(P256_POINT_AFFINE *val,
+//                            const P256_POINT_AFFINE *in_t, int idx);
+// v0: 4; v1: index (int idx);
+// v2, v3, v4, v5: 1+4i, 2+4i, 3+4i, 4+4i;
+// v6, v7, v8, v9: results;
+// v10,v11,v12,v13: masks;
+// v14-v29: points value
+.globl	ecp_sm2z256_gather_w7_neon
+.type	ecp_sm2z256_gather_w7_neon,%function
+.align	4
+ecp_sm2z256_gather_w7_neon:
+	// each 64-bit items is 4
+	movi v0.4s, 4
+	// index
+	dup v1.2d, $index
+	// each 32-bit items is 1+4i/2+4i/3+4i/4+4i
+	movi v2.4s, 1
+	movi v3.4s, 2
+	movi v4.4s, 3
+	movi v5.4s, 4
+	// clear v6-v9 for saving results
+	eor v6.16b, v6.16b, v6.16b
+	eor v7.16b, v7.16b, v7.16b
+	eor v8.16b, v8.16b, v8.16b
+	eor v9.16b, v9.16b, v9.16b
+	// for (i = 0; i < 16; i++) each loop scan four points
+	mov x3, 16
+.Loop_gather_w7_neon:
+	// load 4 points, 4 vectors can accommodate 1 points
+	ld1 {v14.2d, v15.2d, v16.2d, v17.2d}, [$inp], 64	// (4i)  -th point
+	ld1 {v18.2d, v19.2d, v20.2d, v21.2d}, [$inp], 64	// (4i+1)-th point
+	ld1 {v22.2d, v23.2d, v24.2d, v25.2d}, [$inp], 64	// (4i+2)-th point
+	ld1 {v26.2d, v27.2d, v28.2d, v29.2d}, [$inp], 64	// (4i+3)-th point
+	// generate masks according to index
+	cmeq v10.4s, v2.4s, v1.4s
+	cmeq v11.4s, v3.4s, v1.4s
+	cmeq v12.4s, v4.4s, v1.4s
+	cmeq v13.4s, v5.4s, v1.4s
+	// add 4 for each items of v2-v5
+	add v2.4s, v2.4s, v0.4s
+	add v3.4s, v3.4s, v0.4s
+	add v4.4s, v4.4s, v0.4s
+	add v5.4s, v5.4s, v0.4s
+	// point AND with masks for getting the point we want
+	and v14.16b, v14.16b, v10.16b
+	and v15.16b, v15.16b, v10.16b
+	and v16.16b, v16.16b, v10.16b
+	and v17.16b, v17.16b, v10.16b
+
+	and v18.16b, v18.16b, v11.16b
+	and v19.16b, v19.16b, v11.16b
+	and v20.16b, v20.16b, v11.16b
+	and v21.16b, v21.16b, v11.16b
+
+	and v22.16b, v22.16b, v12.16b
+	and v23.16b, v23.16b, v12.16b
+	and v24.16b, v24.16b, v12.16b
+	and v25.16b, v25.16b, v12.16b
+
+	and v26.16b, v26.16b, v13.16b
+	and v27.16b, v27.16b, v13.16b
+	and v28.16b, v28.16b, v13.16b
+	and v29.16b, v29.16b, v13.16b
+
+	// masked_point XOR with results for getting final results
+	eor v6.16b, v6.16b, v14.16b
+	eor v7.16b, v7.16b, v15.16b
+	eor v8.16b, v8.16b, v16.16b
+	eor v9.16b, v9.16b, v17.16b
+
+	eor v6.16b, v6.16b, v18.16b
+	eor v7.16b, v7.16b, v19.16b
+	eor v8.16b, v8.16b, v20.16b
+	eor v9.16b, v9.16b, v21.16b
+
+	eor v6.16b, v6.16b, v22.16b
+	eor v7.16b, v7.16b, v23.16b
+	eor v8.16b, v8.16b, v24.16b
+	eor v9.16b, v9.16b, v25.16b
+
+	eor v6.16b, v6.16b, v26.16b
+	eor v7.16b, v7.16b, v27.16b
+	eor v8.16b, v8.16b, v28.16b
+	eor v9.16b, v9.16b, v29.16b
+
+	subs x3, x3, 1
+	b.ne .Loop_gather_w7_neon
+
+	st1 {v6.2d, v7.2d, v8.2d, v9.2d}, [$out]
+	ret
+.size	ecp_sm2z256_gather_w7_neon,.-ecp_sm2z256_gather_w7_neon
+___
+
 }
 
 foreach (split("\n",$code)) {
