@@ -1990,7 +1990,6 @@ ecp_sm2z256_gather_w5:
 ecp_sm2z256_scatter_w7:
 	stp	x29,x30,[sp,#-16]!
 	add	x29,sp,#0
-	// $out+=$index
 	add	$out,$out,$index
 	// loop num = 8
 	mov	$index,#64/8
@@ -2095,6 +2094,179 @@ ecp_sm2z256_gather_w7:
 	ldr	x29,[sp],#16
 	ret
 .size	ecp_sm2z256_gather_w7,.-ecp_sm2z256_gather_w7
+
+// void	ecp_sm2z256_scatter_w6(void *x0,const P256_POINT *x1,
+//					 int x2);
+.globl	ecp_sm2z256_scatter_w6
+.type	ecp_sm2z256_scatter_w6,%function
+.align	4
+ecp_sm2z256_scatter_w6:
+	stp	x29,x30,[sp,#-16]!
+	add	x29,sp,#0
+
+	sub $index,$index,#1
+	// +$index*2, because the basic item is 16-bit
+	add	$out,$out,$index,lsl#1
+
+	// each loop handle 16B, 1 point = 96B, 96/16=6
+	mov $index,#96/16
+.Loop_scatter_w6:
+	ldp x3, x4, [$inp], #16
+	subs $index,$index,#1
+	strh w3,[$out,#64*0]
+	lsr x3,x3,#16
+	strh w3,[$out,#64*1]
+	lsr x3,x3,#16
+	strh w3,[$out,#64*2]
+	lsr x3,x3,#16
+	strh w3,[$out,#64*3]
+
+	strh w4,[$out,#64*4]
+	lsr x4,x4,#16
+	strh w4,[$out,#64*5]
+	lsr x4,x4,#16
+	strh w4,[$out,#64*6]
+	lsr x4,x4,#16
+	strh w4,[$out,#64*7]
+	add $out,$out,#64*8
+	b.ne .Loop_scatter_w6
+
+	ldr	x29,[sp],#16
+	ret
+.size	ecp_sm2z256_scatter_w6,.-ecp_sm2z256_scatter_w6
+
+// void ecp_sm2z256_gather_w6(P256_POINT_AFFINE *val,
+//                            const P256_POINT_AFFINE *in_t, int idx);
+.globl	ecp_sm2z256_gather_w6
+.type	ecp_sm2z256_gather_w6,%function
+.align	4
+ecp_sm2z256_gather_w6:
+	stp	x29,x30,[sp,#-16]!
+	add	x29,sp,#0
+
+	cmp	$index,xzr
+	csetm	x3,ne
+	add	$index,$index,x3
+	add	$inp,$inp,$index,lsl#1
+	mov	$index,#96/16
+	nop
+.Loop_gather_w6:
+	ldrh	w4,[$inp,#64*0]
+	// loop control
+	subs	$index,$index,#1
+	ldrh	w5,[$inp,#64*1]
+	ldrh	w6,[$inp,#64*2]
+	ldrh	w7,[$inp,#64*3]
+	ldrh	w8,[$inp,#64*4]
+	ldrh	w9,[$inp,#64*5]
+	ldrh	w10,[$inp,#64*6]
+	ldrh	w11,[$inp,#64*7]
+	// $inp+=512
+	add	$inp,$inp,#64*8
+	// concat 8 16-bit into 2 64-bit 
+	orr	x4,x4,x5,lsl#16
+	orr	x6,x6,x7,lsl#16
+	orr	x8,x8,x9,lsl#16
+	orr x10,x10,x11,lsl#16
+
+	orr	x4,x4,x6,lsl#32
+	orr	x8,x8,x10,lsl#32
+
+	// if $index=0, output=0
+	and	x4,x4,x3
+	and x8,x8,x3
+	// store 2 64-bit value
+	stp	x4,x8,[$out],#16
+	b.ne	.Loop_gather_w6
+
+	ldr	x29,[sp],#16
+	ret
+.size	ecp_sm2z256_gather_w6,.-ecp_sm2z256_gather_w6
+
+// void	ecp_sm2z256_scatter_w7_unfixed_point(void *x0,const P256_POINT_AFFINE *x1,
+//					 int x2);
+.globl	ecp_sm2z256_scatter_w7_unfixed_point
+.type	ecp_sm2z256_scatter_w7_unfixed_point,%function
+.align	4
+ecp_sm2z256_scatter_w7_unfixed_point:
+	stp	x29,x30,[sp,#-16]!
+	add	x29,sp,#0
+	add	$out,$out,$index
+	sub $out,$out,#1
+	// each loop handle 8B, 1 point = 96B, so loop num = 12
+	mov	$index,#96/8
+.Loop_scatter_w7_unfixed_point:
+	// load 64-bit from $inp and update $inp
+	ldr	x3,[$inp],#8
+	subs	$index,$index,#1
+	// put the i-th Byte
+	strb	w3,[$out,#64*0]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*1]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*2]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*3]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*4]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*5]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*6]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*7]
+	add	$out,$out,#64*8
+	b.ne	.Loop_scatter_w7_unfixed_point
+
+	ldr	x29,[sp],#16
+	ret
+.size	ecp_sm2z256_scatter_w7_unfixed_point,.-ecp_sm2z256_scatter_w7_unfixed_point
+
+// void ecp_sm2z256_gather_w7_unfixed_point(P256_POINT_AFFINE *val,
+//                            const P256_POINT_AFFINE *in_t, int idx);
+.globl	ecp_sm2z256_gather_w7_unfixed_point
+.type	ecp_sm2z256_gather_w7_unfixed_point,%function
+.align	4
+ecp_sm2z256_gather_w7_unfixed_point:
+	stp	x29,x30,[sp,#-16]!
+	add	x29,sp,#0
+
+	cmp	$index,xzr
+	csetm	x3,ne
+	add	$index,$index,x3
+	add	$inp,$inp,$index
+	mov	$index,#96/8
+	nop
+// ldrb: load a byte with zero-extended
+.Loop_gather_w7_unfixed_point:
+	ldrb	w4,[$inp,#64*0]
+	subs	$index,$index,#1
+	ldrb	w5,[$inp,#64*1]
+	ldrb	w6,[$inp,#64*2]
+	ldrb	w7,[$inp,#64*3]
+	ldrb	w8,[$inp,#64*4]
+	ldrb	w9,[$inp,#64*5]
+	ldrb	w10,[$inp,#64*6]
+	ldrb	w11,[$inp,#64*7]
+	// $inp+=512
+	add	$inp,$inp,#64*8
+	// concat 8 8-bit into 1 64-bit 
+	orr	x4,x4,x5,lsl#8
+	orr	x6,x6,x7,lsl#8
+	orr	x8,x8,x9,lsl#8
+	orr	x4,x4,x6,lsl#16
+	orr	x10,x10,x11,lsl#8
+	orr	x4,x4,x8,lsl#32
+	orr	x4,x4,x10,lsl#48
+	// if $index=0, output=0
+	and	x4,x4,x3
+	// store the 64-bit value
+	str	x4,[$out],#8
+	b.ne	.Loop_gather_w7_unfixed_point
+
+	ldr	x29,[sp],#16
+	ret
+.size	ecp_sm2z256_gather_w7_unfixed_point,.-ecp_sm2z256_gather_w7_unfixed_point
 ___
 }
 else
