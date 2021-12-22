@@ -109,23 +109,24 @@ void ecp_sm2z256_scatter_w5(P256_POINT *val,
                              const P256_POINT *in_t, int idx);
 void ecp_sm2z256_gather_w5(P256_POINT *val,
                             const P256_POINT *in_t, int idx);
-void ecp_sm2z256_scatter_w5_neon(P256_POINT *val,
-                             const P256_POINT *in_t, int idx);
-void ecp_sm2z256_gather_w5_neon(P256_POINT *val,
-                            const P256_POINT *in_t, int idx);
 void ecp_sm2z256_scatter_w7(P256_POINT_AFFINE *val,
-                             const P256_POINT_AFFINE *in_t, int idx);
-void ecp_sm2z256_scatter_w7_neon(P256_POINT_AFFINE *val,
                              const P256_POINT_AFFINE *in_t, int idx);
 void ecp_sm2z256_gather_w7(P256_POINT_AFFINE *val,
                             const P256_POINT_AFFINE *in_t, int idx);
-void ecp_sm2z256_gather_w7_neon(P256_POINT_AFFINE *val,
-                            const P256_POINT_AFFINE *in_t, int idx);                            
-#define ecp_sm2z256_scatter_w7 ecp_sm2z256_scatter_w7_neon
-#define ecp_sm2z256_gather_w7 ecp_sm2z256_gather_w7_neon
 
-#define ecp_sm2z256_scatter_w5 ecp_sm2z256_scatter_w5_neon
-#define ecp_sm2z256_gather_w5 ecp_sm2z256_gather_w5_neon
+// void ecp_sm2z256_scatter_w5_neon(P256_POINT *val,
+//                              const P256_POINT *in_t, int idx);
+// void ecp_sm2z256_gather_w5_neon(P256_POINT *val,
+//                             const P256_POINT *in_t, int idx);      
+// void ecp_sm2z256_scatter_w7_neon(P256_POINT_AFFINE *val,
+//                              const P256_POINT_AFFINE *in_t, int idx);
+// void ecp_sm2z256_gather_w7_neon(P256_POINT_AFFINE *val,
+//                             const P256_POINT_AFFINE *in_t, int idx);
+// #define ecp_sm2z256_scatter_w7 ecp_sm2z256_scatter_w7_neon
+// #define ecp_sm2z256_gather_w7 ecp_sm2z256_gather_w7_neon
+
+// #define ecp_sm2z256_scatter_w5 ecp_sm2z256_scatter_w5_neon
+// #define ecp_sm2z256_gather_w5 ecp_sm2z256_gather_w5_neon
 /* One converted into the Montgomery domain */
 static const BN_ULONG ONE[P256_LIMBS] = {
     TOBN(0x00000000, 0x00000001), TOBN(0x00000000, 0xffffffff),
@@ -174,9 +175,15 @@ static unsigned int _booth_recode_w5(unsigned int in)
 static unsigned int _booth_recode_w7(unsigned int in)
 {
     unsigned int s, d;
+    // if in's sign = 0 then s = 0...0
+    // if in's sign = 1 then s = 1...1
     s = ~((in >> 7) - 1);
+    // bitwise negation with 7-bit width
     d = (1 << 8) - in - 1;
+    // if in's sign = 0, d = in
+    // if in's sign = 1, d = d
     d = (d & s) | (in & ~s);
+    // d & 1 is the sign bit of previous word
     d = (d >> 1) + (d & 1);
     return (d << 1) + (s & 1);
 }
@@ -723,6 +730,9 @@ __owur static int ecp_sm2z256_bignum_to_field_elem(BN_ULONG out[P256_LIMBS],
     return bn_copy_words(out, in, P256_LIMBS);
 }
 
+# define WINDOWS_SIZE_UNFIXED 5
+# define SUB_TABLE_SIZE (1<<(WINDOWS_SIZE_UNFIXED-1))
+
 /* r = sum(scalar[i]*point[i]) */
 __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
                                             P256_POINT *r,
@@ -733,19 +743,20 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
     size_t i;
     int j, ret = 0;
     unsigned int idx;
+    // (*p_str) is the uncertain-amount first-dimension, [33] is the certain-amount second-dimension
     unsigned char (*p_str)[33] = NULL;
-    const unsigned int window_size = 5;
-    const unsigned int mask = (1 << (window_size + 1)) - 1;
     unsigned int wvalue;
     P256_POINT *temp;           /* place for 5 temporary points */
     const BIGNUM **scalars = NULL;
-    P256_POINT (*table)[16] = NULL;
     void *table_storage = NULL;
+    P256_POINT (*table)[SUB_TABLE_SIZE] = NULL;
+    const unsigned int window_size = WINDOWS_SIZE_UNFIXED;
+    const unsigned int mask = (1 << (window_size + 1)) - 1;
 
     // malloc memory for table, p_str, scalars
-    if ((num * 16 + 6) > OPENSSL_MALLOC_MAX_NELEMS(P256_POINT)
+    if ((num * SUB_TABLE_SIZE + 6) > OPENSSL_MALLOC_MAX_NELEMS(P256_POINT)
         || (table_storage =
-            OPENSSL_malloc((num * 16 + 5) * sizeof(P256_POINT) + 64)) == NULL
+            OPENSSL_malloc((num * SUB_TABLE_SIZE + 5) * sizeof(P256_POINT) + 64)) == NULL
         || (p_str =
             OPENSSL_malloc(num * 33 * sizeof(unsigned char))) == NULL
         || (scalars = OPENSSL_malloc(num * sizeof(BIGNUM *))) == NULL) {
@@ -754,6 +765,8 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
     }
 
     table = (void *)ALIGNPTR(table_storage, 64);
+    // num is added to the first dimension
+    // temp[0-5] is used as temporary values
     temp = (P256_POINT *)(table + num);
 
     for (i = 0; i < num; i++) {
@@ -779,7 +792,7 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
             p_str[i][j + 0] = (unsigned char)d;
             p_str[i][j + 1] = (unsigned char)(d >> 8);
             p_str[i][j + 2] = (unsigned char)(d >> 16);
-            p_str[i][j + 3] = (unsigned char)(d >>= 24);
+            p_str[i][j + 3] = (unsigned char)(d >>= 24);    // d = d >> 24
             if (BN_BYTES == 8) {
                 d >>= 8;
                 p_str[i][j + 4] = (unsigned char)d;
@@ -837,14 +850,52 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
         ecp_sm2z256_scatter_w5  (row, &temp[1], 16);
     }
 
-    idx = 255;
+    /**
+     * 
+     * Why idx = 255? Why (idx - 1) / 8 & (idx - 1) % 8? Why 8?
+     * 
+     * 8: 8-bit each p_str
+     * 
+     * 256 % 5 = 1, so we need to firstly handle the booth encode of
+     * remaining top 1-bit, i.e., p_str[0][31] >> 6
+     * 2-th call booth_encode: p_str[0][31] >> 1
+     * 3-th call booth_encode: (p_str[0][31] << 8 | p_str[0][30]) >> 4
+     * 
+     * I don't know how to construct (idx - 1) / 8 and % 8
+     * But I know it is correct
+     * 
+     * Maybe, - 1 is because of the property of the booth encoding
+     * 
+     * idx = 255
+     * wvalue = p_str[0][31]
+     * wvalue = (wvalue >> 6) & mask
+     * booth_recode_w5(wvalue) and gather
+     * five r=r^2
+     * 
+     * idx = 255 - 5 = 250
+     * off = (250 - 1) / 8 = 31
+     * wvalue = p_str[0][32] << 8 | p_str[0][31] = 0 | p_str[0][31]
+     * wvalue = (wvalue >> 1) & mask
+     * gather -> conditional neg -> point add
+     * 
+     * idx = 250 - 5 = 245
+     * off = (245 - 1) / 8 = 30
+     * wvalue = p_str[0][31] << 8 | p_str[0][30]
+     * wvalue = (wvalue >> 4) & mask
+     */
 
+
+    idx = 255;
+    // wvalue = p_str[0][31]
     wvalue = p_str[0][(idx - 1) / 8];
+    // (wvalue >> 6) & mask
     wvalue = (wvalue >> ((idx - 1) % 8)) & mask;
 
     /*
      * We gather to temp[0], because we know it's position relative
      * to table
+     * 
+     * Here, we process the top-1 bit, so no need to conditional neg
      */
     ecp_sm2z256_gather_w5(&temp[0], table[0], _booth_recode_w5(wvalue) >> 1);
     memcpy(r, &temp[0], sizeof(temp[0]));

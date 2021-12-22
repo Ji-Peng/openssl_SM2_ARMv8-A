@@ -57,13 +57,14 @@ $code.=<<___;
 ecp_sm2z256_precomputed:
 ___
 
+$gather_scatter_use_neon = 0;
 
 ########################################################################
 # this conversion smashes P256_POINT_AFFINE by individual bytes with
 # 64 byte interval, similar to
 #	1111222233334444
 #	1234123412341234
-if (0) {
+if($gather_scatter_use_neon == 0) {
 	# there are 37 sub-tables, where each sub-table has 64 points
 	# and each point is 64B (32B for X, 32B for Y)
 	# each item of @arr is 4B, so a sub-table includes 64*64/4=64*16 items
@@ -79,10 +80,7 @@ if (0) {
 			$code.="\n";
 		}
 	}
-}
-
-# this conversion does not smashes P256_POINT_AFFINE
-if (1) {
+} else {
 	# each item of @arr is 4B, 16*4B=64B = 1 point
 	while (@line=splice(@arr,0,16)) {
 		$code.=".word\t";
@@ -1841,6 +1839,7 @@ ___
 
 ########################################################################
 # scatter-gather subroutines
+if($gather_scatter_use_neon == 0)
 {
 my ($out,$inp,$index,$mask)=map("x$_",(0..3));
 $code.=<<___;
@@ -1905,25 +1904,6 @@ ecp_sm2z256_scatter_w5:
 	ldr	x29,[sp],#16
 	ret
 .size	ecp_sm2z256_scatter_w5,.-ecp_sm2z256_scatter_w5
-
-// void	ecp_sm2z256_scatter_w5_neon(void *x0,const P256_POINT *x1,
-//					 int x2);
-.globl	ecp_sm2z256_scatter_w5_neon
-.type	ecp_sm2z256_scatter_w5_neon,%function
-.align	4
-ecp_sm2z256_scatter_w5_neon:
-	// 1 point = 3 * 32B = 6 vectors
-	ld1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$inp], 64
-	// $index = ($index - 1) * 3 * 32
-	sub $index, $index, 1
-	add $index, $index, $index, lsl 1	// $index = $index + $index<<1
-	lsl $index, $index, 5
-	ld1 {v4.2d, v5.2d}, [$inp]
-	add $out, $out, $index
-	st1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$out], 64
-	st1 {v4.2d, v5.2d}, [$out]
-	ret
-.size	ecp_sm2z256_scatter_w5_neon,.-ecp_sm2z256_scatter_w5_neon
 
 // void	ecp_sm2z256_gather_w5(P256_POINT *x0,const void *x1,
 //					      int x2);
@@ -2001,6 +1981,144 @@ ecp_sm2z256_gather_w5:
 	ldr	x29,[sp],#16
 	ret
 .size	ecp_sm2z256_gather_w5,.-ecp_sm2z256_gather_w5
+
+// void	ecp_sm2z256_scatter_w7(void *x0,const P256_POINT_AFFINE *x1,
+//					 int x2);
+.globl	ecp_sm2z256_scatter_w7
+.type	ecp_sm2z256_scatter_w7,%function
+.align	4
+ecp_sm2z256_scatter_w7:
+	stp	x29,x30,[sp,#-16]!
+	add	x29,sp,#0
+	// $out+=$index
+	add	$out,$out,$index
+	// loop num = 8
+	mov	$index,#64/8
+// each loop handle 8B, 1 point = 64B, so loop num = 8
+.Loop_scatter_w7:
+	// load 64-bit from $inp and update $inp
+	ldr	x3,[$inp],#8
+	subs	$index,$index,#1
+	prfm	pstl1strm,[$out,#4096+64*0]
+	prfm	pstl1strm,[$out,#4096+64*1]
+	prfm	pstl1strm,[$out,#4096+64*2]
+	prfm	pstl1strm,[$out,#4096+64*3]
+	prfm	pstl1strm,[$out,#4096+64*4]
+	prfm	pstl1strm,[$out,#4096+64*5]
+	prfm	pstl1strm,[$out,#4096+64*6]
+	prfm	pstl1strm,[$out,#4096+64*7]
+	// put the i-th Byte
+	strb	w3,[$out,#64*0]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*1]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*2]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*3]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*4]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*5]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*6]
+	lsr	x3,x3,#8
+	strb	w3,[$out,#64*7]
+	add	$out,$out,#64*8
+	b.ne	.Loop_scatter_w7
+
+	ldr	x29,[sp],#16
+	ret
+.size	ecp_sm2z256_scatter_w7,.-ecp_sm2z256_scatter_w7
+
+// void ecp_sm2z256_gather_w7(P256_POINT_AFFINE *val,
+//                            const P256_POINT_AFFINE *in_t, int idx);
+.globl	ecp_sm2z256_gather_w7
+.type	ecp_sm2z256_gather_w7,%function
+.align	4
+ecp_sm2z256_gather_w7:
+	stp	x29,x30,[sp,#-16]!
+	add	x29,sp,#0
+
+	cmp	$index,xzr
+	// Conditional Set Mask sets all bits of the destination register to 1
+	// if the condition is TRUE, and otherwise sets all bits to 0.
+	// i.e. if $index!=0 then x3=0xff...ff
+	csetm	x3,ne
+	// if $index=1, $index=1+0xff...ff=0
+	add	$index,$index,x3
+	// if $index=1 $inp=$inp+1
+	add	$inp,$inp,$index
+	// $index = 8, loop repeats 8 times
+	mov	$index,#64/8
+	nop
+// ldrb: load a byte with zero-extended
+// prfm pldl1strm, pld: prefetch for load; l1: level 1 cache; 
+// strm: for data that is used only once
+// this loop loads 8 bytes = 1 64-bit from [$inp,#64*0]-[$inp,#64*7] each time
+// this loop loads 8*64-bit overall
+// prefetch for load [#4096+64*0]-[#4096+64*7]
+.Loop_gather_w7:
+	ldrb	w4,[$inp,#64*0]
+	prfm	pldl1strm,[$inp,#4096+64*0]
+	// loop control
+	subs	$index,$index,#1
+	ldrb	w5,[$inp,#64*1]
+	prfm	pldl1strm,[$inp,#4096+64*1]
+	ldrb	w6,[$inp,#64*2]
+	prfm	pldl1strm,[$inp,#4096+64*2]
+	ldrb	w7,[$inp,#64*3]
+	prfm	pldl1strm,[$inp,#4096+64*3]
+	ldrb	w8,[$inp,#64*4]
+	prfm	pldl1strm,[$inp,#4096+64*4]
+	ldrb	w9,[$inp,#64*5]
+	prfm	pldl1strm,[$inp,#4096+64*5]
+	ldrb	w10,[$inp,#64*6]
+	prfm	pldl1strm,[$inp,#4096+64*6]
+	ldrb	w11,[$inp,#64*7]
+	prfm	pldl1strm,[$inp,#4096+64*7]
+	// $inp+=512
+	add	$inp,$inp,#64*8
+	// concat 8 8-bit into 1 64-bit 
+	orr	x4,x4,x5,lsl#8
+	orr	x6,x6,x7,lsl#8
+	orr	x8,x8,x9,lsl#8
+	orr	x4,x4,x6,lsl#16
+	orr	x10,x10,x11,lsl#8
+	orr	x4,x4,x8,lsl#32
+	orr	x4,x4,x10,lsl#48
+	// if $index=0, output=0
+	and	x4,x4,x3
+	// store the 64-bit value
+	str	x4,[$out],#8
+	b.ne	.Loop_gather_w7
+
+	ldr	x29,[sp],#16
+	ret
+.size	ecp_sm2z256_gather_w7,.-ecp_sm2z256_gather_w7
+___
+}
+else
+{
+my ($out,$inp,$index)=map("x$_",(0..2));
+$code.=<<___;
+// void	ecp_sm2z256_scatter_w5_neon(void *x0,const P256_POINT *x1,
+//					 int x2);
+.globl	ecp_sm2z256_scatter_w5_neon
+.type	ecp_sm2z256_scatter_w5_neon,%function
+.align	4
+ecp_sm2z256_scatter_w5_neon:
+	// 1 point = 3 * 32B = 6 vectors
+	ld1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$inp], 64
+	// $index = ($index - 1) * 3 * 32
+	sub $index, $index, 1
+	add $index, $index, $index, lsl 1	// $index = $index + $index<<1
+	lsl $index, $index, 5
+	ld1 {v4.2d, v5.2d}, [$inp]
+	add $out, $out, $index
+	st1 {v0.2d, v1.2d, v2.2d, v3.2d}, [$out], 64
+	st1 {v4.2d, v5.2d}, [$out]
+	ret
+.size	ecp_sm2z256_scatter_w5_neon,.-ecp_sm2z256_scatter_w5_neon
 
 // void	ecp_sm2z256_gather_w5_neon(P256_POINT *x0,const void *x1,
 //					      int x2);
@@ -2116,54 +2234,6 @@ ecp_sm2z256_gather_w5_neon:
 	ret
 .size	ecp_sm2z256_gather_w5_neon,.-ecp_sm2z256_gather_w5_neon
 
-// void	ecp_sm2z256_scatter_w7(void *x0,const P256_POINT_AFFINE *x1,
-//					 int x2);
-.globl	ecp_sm2z256_scatter_w7
-.type	ecp_sm2z256_scatter_w7,%function
-.align	4
-ecp_sm2z256_scatter_w7:
-	stp	x29,x30,[sp,#-16]!
-	add	x29,sp,#0
-	// $out+=$index
-	add	$out,$out,$index
-	// loop num = 8
-	mov	$index,#64/8
-// each loop handle 8B, 1 point = 64B, so loop num = 8
-.Loop_scatter_w7:
-	// load 64-bit from $inp and update $inp
-	ldr	x3,[$inp],#8
-	subs	$index,$index,#1
-	prfm	pstl1strm,[$out,#4096+64*0]
-	prfm	pstl1strm,[$out,#4096+64*1]
-	prfm	pstl1strm,[$out,#4096+64*2]
-	prfm	pstl1strm,[$out,#4096+64*3]
-	prfm	pstl1strm,[$out,#4096+64*4]
-	prfm	pstl1strm,[$out,#4096+64*5]
-	prfm	pstl1strm,[$out,#4096+64*6]
-	prfm	pstl1strm,[$out,#4096+64*7]
-	// put the i-th Byte
-	strb	w3,[$out,#64*0]
-	lsr	x3,x3,#8
-	strb	w3,[$out,#64*1]
-	lsr	x3,x3,#8
-	strb	w3,[$out,#64*2]
-	lsr	x3,x3,#8
-	strb	w3,[$out,#64*3]
-	lsr	x3,x3,#8
-	strb	w3,[$out,#64*4]
-	lsr	x3,x3,#8
-	strb	w3,[$out,#64*5]
-	lsr	x3,x3,#8
-	strb	w3,[$out,#64*6]
-	lsr	x3,x3,#8
-	strb	w3,[$out,#64*7]
-	add	$out,$out,#64*8
-	b.ne	.Loop_scatter_w7
-
-	ldr	x29,[sp],#16
-	ret
-.size	ecp_sm2z256_scatter_w7,.-ecp_sm2z256_scatter_w7
-
 // void	ecp_sm2z256_scatter_w7_neon(void *x0,const P256_POINT_AFFINE *x1,
 //					 int x2);
 .globl	ecp_sm2z256_scatter_w7_neon
@@ -2180,77 +2250,6 @@ ecp_sm2z256_scatter_w7_neon:
 	ret
 .size	ecp_sm2z256_scatter_w7_neon,.-ecp_sm2z256_scatter_w7_neon
 
-// void ecp_sm2z256_gather_w7(P256_POINT_AFFINE *val,
-//                            const P256_POINT_AFFINE *in_t, int idx);
-.globl	ecp_sm2z256_gather_w7
-.type	ecp_sm2z256_gather_w7,%function
-.align	4
-ecp_sm2z256_gather_w7:
-	stp	x29,x30,[sp,#-16]!
-	add	x29,sp,#0
-
-	cmp	$index,xzr
-	// Conditional Set Mask sets all bits of the destination register to 1
-	// if the condition is TRUE, and otherwise sets all bits to 0.
-	// i.e. if $index!=0 then x3=0xff...ff
-	csetm	x3,ne
-	// if $index=1, $index=1+0xff...ff=0
-	add	$index,$index,x3
-	// if $index=1 $inp=$inp+1
-	add	$inp,$inp,$index
-	// $index = 8, loop repeats 8 times
-	mov	$index,#64/8
-	nop
-// ldrb: load a byte with zero-extended
-// prfm pldl1strm, pld: prefetch for load; l1: level 1 cache; 
-// strm: for data that is used only once
-// this loop loads 8 bytes = 1 64-bit from [$inp,#64*0]-[$inp,#64*7] each time
-// this loop loads 8*64-bit overall
-// prefetch for load [#4096+64*0]-[#4096+64*7]
-.Loop_gather_w7:
-	ldrb	w4,[$inp,#64*0]
-	prfm	pldl1strm,[$inp,#4096+64*0]
-	// loop control
-	subs	$index,$index,#1
-	ldrb	w5,[$inp,#64*1]
-	prfm	pldl1strm,[$inp,#4096+64*1]
-	ldrb	w6,[$inp,#64*2]
-	prfm	pldl1strm,[$inp,#4096+64*2]
-	ldrb	w7,[$inp,#64*3]
-	prfm	pldl1strm,[$inp,#4096+64*3]
-	ldrb	w8,[$inp,#64*4]
-	prfm	pldl1strm,[$inp,#4096+64*4]
-	ldrb	w9,[$inp,#64*5]
-	prfm	pldl1strm,[$inp,#4096+64*5]
-	ldrb	w10,[$inp,#64*6]
-	prfm	pldl1strm,[$inp,#4096+64*6]
-	ldrb	w11,[$inp,#64*7]
-	prfm	pldl1strm,[$inp,#4096+64*7]
-	// $inp+=512
-	add	$inp,$inp,#64*8
-	// concat 8 8-bit into 1 64-bit 
-	orr	x4,x4,x5,lsl#8
-	orr	x6,x6,x7,lsl#8
-	orr	x8,x8,x9,lsl#8
-	orr	x4,x4,x6,lsl#16
-	orr	x10,x10,x11,lsl#8
-	orr	x4,x4,x8,lsl#32
-	orr	x4,x4,x10,lsl#48
-	// if $index=0, output=0
-	and	x4,x4,x3
-	// store the 64-bit value
-	str	x4,[$out],#8
-	b.ne	.Loop_gather_w7
-
-	ldr	x29,[sp],#16
-	ret
-.size	ecp_sm2z256_gather_w7,.-ecp_sm2z256_gather_w7
-___
-}
-
-{
-my ($out,$inp,$index)=map("x$_",(0..2));
-$code.=<<___;
 // void ecp_sm2z256_gather_w7_neon(P256_POINT_AFFINE *val,
 //                            const P256_POINT_AFFINE *in_t, int idx);
 // v0: 4; v1: index (int idx);
@@ -2343,7 +2342,6 @@ ecp_sm2z256_gather_w7_neon:
 	ret
 .size	ecp_sm2z256_gather_w7_neon,.-ecp_sm2z256_gather_w7_neon
 ___
-
 }
 
 foreach (split("\n",$code)) {
