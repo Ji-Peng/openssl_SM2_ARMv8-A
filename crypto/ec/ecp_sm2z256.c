@@ -113,7 +113,10 @@ void ecp_sm2z256_scatter_w7(P256_POINT_AFFINE *val,
                              const P256_POINT_AFFINE *in_t, int idx);
 void ecp_sm2z256_gather_w7(P256_POINT_AFFINE *val,
                             const P256_POINT_AFFINE *in_t, int idx);
-
+void ecp_sm2z256_scatter_w7_unfixed_point(void *x0,
+                            const P256_POINT_AFFINE *x1, int x2);
+void ecp_sm2z256_gather_w7_unfixed_point(P256_POINT_AFFINE *val,
+                            const P256_POINT_AFFINE *in_t, int idx);
 // void ecp_sm2z256_scatter_w5_neon(P256_POINT *val,
 //                              const P256_POINT *in_t, int idx);
 // void ecp_sm2z256_gather_w5_neon(P256_POINT *val,
@@ -145,6 +148,18 @@ static unsigned int _booth_recode_w5(unsigned int in)
 
     s = ~((in >> 5) - 1);
     d = (1 << 6) - in - 1;
+    d = (d & s) | (in & ~s);
+    d = (d >> 1) + (d & 1);
+
+    return (d << 1) + (s & 1);
+}
+
+static unsigned int _booth_recode_w6(unsigned int in)
+{
+    unsigned int s, d;
+
+    s = ~((in >> 6) - 1);
+    d = (1 << 7) - in - 1;
     d = (d & s) | (in & ~s);
     d = (d >> 1) + (d & 1);
 
@@ -731,7 +746,14 @@ __owur static int ecp_sm2z256_bignum_to_field_elem(BN_ULONG out[P256_LIMBS],
 }
 
 # define WINDOWS_SIZE_UNFIXED 5
+
 # define SUB_TABLE_SIZE (1<<(WINDOWS_SIZE_UNFIXED-1))
+# if (WINDOWS_SIZE_UNFIXED == 5)
+# elif (WINDOWS_SIZE_UNFIXED == 6)
+# define ecp_sm2z256_scatter_w5 ecp_sm2z256_scatter_w6
+# define ecp_sm2z256_gather_w5 ecp_sm2z256_gather_w6
+# define _booth_recode_w5 _booth_recode_w6
+# endif
 
 /* r = sum(scalar[i]*point[i]) */
 __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
@@ -754,9 +776,11 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
     const unsigned int mask = (1 << (window_size + 1)) - 1;
 
     // malloc memory for table, p_str, scalars
+    // for windows_size = 5 we need extra 5 points for temporary usage
+    // for windows_size = 7 we need extra 9 points for temporary usage
     if ((num * SUB_TABLE_SIZE + 6) > OPENSSL_MALLOC_MAX_NELEMS(P256_POINT)
         || (table_storage =
-            OPENSSL_malloc((num * SUB_TABLE_SIZE + 5) * sizeof(P256_POINT) + 64)) == NULL
+            OPENSSL_malloc((num * SUB_TABLE_SIZE + 9) * sizeof(P256_POINT) + 64)) == NULL
         || (p_str =
             OPENSSL_malloc(num * 33 * sizeof(unsigned char))) == NULL
         || (scalars = OPENSSL_malloc(num * sizeof(BIGNUM *))) == NULL) {
@@ -816,59 +840,150 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
          * is not stored. All other values are actually stored with an offset
          * of -1 in table.
          */
-
+        // temp[0] is P
         ecp_sm2z256_scatter_w5  (row, &temp[0], 1);
+        // temp[1] is 2P
         ecp_sm2z256_point_double(&temp[1], &temp[0]);              /*1+1=2  */
         ecp_sm2z256_scatter_w5  (row, &temp[1], 2);
+        // temp[2] is 3P
         ecp_sm2z256_point_add   (&temp[2], &temp[1], &temp[0]);    /*2+1=3  */
         ecp_sm2z256_scatter_w5  (row, &temp[2], 3);
+        // temp[1] is 4P
         ecp_sm2z256_point_double(&temp[1], &temp[1]);              /*2*2=4  */
         ecp_sm2z256_scatter_w5  (row, &temp[1], 4);
+        // temp[2] is 6P
         ecp_sm2z256_point_double(&temp[2], &temp[2]);              /*2*3=6  */
         ecp_sm2z256_scatter_w5  (row, &temp[2], 6);
+        // temp[3] is 5P
         ecp_sm2z256_point_add   (&temp[3], &temp[1], &temp[0]);    /*4+1=5  */
         ecp_sm2z256_scatter_w5  (row, &temp[3], 5);
+        // temp[4] is 7P
         ecp_sm2z256_point_add   (&temp[4], &temp[2], &temp[0]);    /*6+1=7  */
         ecp_sm2z256_scatter_w5  (row, &temp[4], 7);
+
+        // now temp[1]=4P, temp[2]=6P, temp[3]=5P, temp[4]=7P
+        // temp[1] is 8P
         ecp_sm2z256_point_double(&temp[1], &temp[1]);              /*2*4=8  */
         ecp_sm2z256_scatter_w5  (row, &temp[1], 8);
+        // temp[2] is 12P
         ecp_sm2z256_point_double(&temp[2], &temp[2]);              /*2*6=12 */
         ecp_sm2z256_scatter_w5  (row, &temp[2], 12);
+        // temp[3] is 10P
         ecp_sm2z256_point_double(&temp[3], &temp[3]);              /*2*5=10 */
         ecp_sm2z256_scatter_w5  (row, &temp[3], 10);
+        // temp[4] is 14P
         ecp_sm2z256_point_double(&temp[4], &temp[4]);              /*2*7=14 */
         ecp_sm2z256_scatter_w5  (row, &temp[4], 14);
+
+# if (WINDOWS_SIZE_UNFIXED == 5)
+        // now temp[1]=8P, temp[2]=12P, temp[3]=10P, temp[4]=14P
+        // temp[2] is 13P
         ecp_sm2z256_point_add   (&temp[2], &temp[2], &temp[0]);    /*12+1=13*/
         ecp_sm2z256_scatter_w5  (row, &temp[2], 13);
+        // temp[3] is 11P
         ecp_sm2z256_point_add   (&temp[3], &temp[3], &temp[0]);    /*10+1=11*/
         ecp_sm2z256_scatter_w5  (row, &temp[3], 11);
+        // temp[4] is 15P
         ecp_sm2z256_point_add   (&temp[4], &temp[4], &temp[0]);    /*14+1=15*/
         ecp_sm2z256_scatter_w5  (row, &temp[4], 15);
+        // temp[2] is 9P
         ecp_sm2z256_point_add   (&temp[2], &temp[1], &temp[0]);    /*8+1=9  */
         ecp_sm2z256_scatter_w5  (row, &temp[2], 9);
+        // temp[1] is 16P
         ecp_sm2z256_point_double(&temp[1], &temp[1]);              /*2*8=16 */
         ecp_sm2z256_scatter_w5  (row, &temp[1], 16);
+        // now temp[0] = P, temp[1] = 16P, temp[2] = 9p, temp[3] = 11P, temp[4] = 15P
+# elif (WINDOWS_SIZE_UNFIXED == 6)
+        // now temp[1]=8P, temp[2]=12P, temp[3]=10P, temp[4]=14P
+        // we will compute temp[5]=9P, temp[6]=11P, temp[7]=13P, temp[8]=15P
+        // temp[5]=9P=8P+1P
+        ecp_sm2z256_point_add(&temp[5], &temp[1], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[5], 9);
+        // temp[6]=11P=10P+1P
+        ecp_sm2z256_point_add(&temp[6], &temp[3], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[6], 11);
+        // temp[7]=13P=12P+1P
+        ecp_sm2z256_point_add(&temp[7], &temp[2], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[7], 13);
+        // temp[8]=15P=14P+1P
+        ecp_sm2z256_point_add(&temp[8], &temp[4], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[8], 15);
+        // we will compute 16,32,17,18,19,...,31
+        // temp[1]=8P*2=16P
+        ecp_sm2z256_point_double(&temp[1], &temp[1]);
+        ecp_sm2z256_scatter_w5(row, &temp[1], 16);
+        // temp[5]=9P*2=18P
+        ecp_sm2z256_point_double(&temp[5], &temp[5]);
+        ecp_sm2z256_scatter_w5(row, &temp[5], 18);
+        // temp[5]=18P+1P=19P
+        ecp_sm2z256_point_add(&temp[5], &temp[5], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[5], 19);
+        // temp[5]=16P+1P=17P
+        ecp_sm2z256_point_add(&temp[5], &temp[1], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[5], 17);
+        // temp[5]=16P*2=32P
+        ecp_sm2z256_point_double(&temp[5], &temp[1]);
+        ecp_sm2z256_scatter_w5(row, &temp[5], 32);
+        // temp[3]=10P*2=20P
+        ecp_sm2z256_point_double(&temp[3], &temp[3]);
+        ecp_sm2z256_scatter_w5(row, &temp[3], 20);
+        // temp[3]=20P+1P=21P
+        ecp_sm2z256_point_add(&temp[3], &temp[3], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[3], 21);
+        // temp[6]=11P*2=22P
+        ecp_sm2z256_point_double(&temp[6], &temp[6]);
+        ecp_sm2z256_scatter_w5(row, &temp[6], 22);
+        // temp[6]=22P+1P=23P
+        ecp_sm2z256_point_add(&temp[6], &temp[6], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[6], 23);
+        // temp[2]=12P*2=24P
+        ecp_sm2z256_point_double(&temp[2], &temp[2]);
+        ecp_sm2z256_scatter_w5(row, &temp[2], 24);
+        // temp[2]=24P+1P=25P
+        ecp_sm2z256_point_add(&temp[2], &temp[2], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[2], 25);
+        // temp[7]=13P*2=26P
+        ecp_sm2z256_point_double(&temp[7], &temp[7]);
+        ecp_sm2z256_scatter_w5(row, &temp[7], 26);
+        // temp[7]=26P+1P=27P
+        ecp_sm2z256_point_add(&temp[7], &temp[7], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[7], 27);
+        // temp[4]=14P*2=28P
+        ecp_sm2z256_point_double(&temp[4], &temp[4]);
+        ecp_sm2z256_scatter_w5(row, &temp[4], 28);
+        // temp[4]=28P+1P
+        ecp_sm2z256_point_add(&temp[4], &temp[4], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[4], 29);
+        // temp[8]=15P*2=30P
+        ecp_sm2z256_point_double(&temp[8], &temp[8]);
+        ecp_sm2z256_scatter_w5(row, &temp[8], 30);
+        // temp[8]=30P+1P
+        ecp_sm2z256_point_add(&temp[8], &temp[8], &temp[0]);
+        ecp_sm2z256_scatter_w5(row, &temp[8], 31);
+# endif
     }
-
     /**
+     * For w=5
      * 
      * Why idx = 255? Why (idx - 1) / 8 & (idx - 1) % 8? Why 8?
      * 
      * 8: 8-bit each p_str
+     * 
+     * idx - 1 means: we will process w-bit windows: 
+     * idx-1+w-1, idx-1+w-2, ..., idx-1
      * 
      * 256 % 5 = 1, so we need to firstly handle the booth encode of
      * remaining top 1-bit, i.e., p_str[0][31] >> 6
      * 2-th call booth_encode: p_str[0][31] >> 1
      * 3-th call booth_encode: (p_str[0][31] << 8 | p_str[0][30]) >> 4
      * 
-     * I don't know how to construct (idx - 1) / 8 and % 8
-     * But I know it is correct
+     * why - 1, here 1 = 256 % 5
      * 
      * Maybe, - 1 is because of the property of the booth encoding
      * 
      * idx = 255
      * wvalue = p_str[0][31]
-     * wvalue = (wvalue >> 6) & mask
+     * wvalue = (wvalue >> 6) & mask, i.e., we will encode the scalar bit 255 & 254
      * booth_recode_w5(wvalue) and gather
      * five r=r^2
      * 
@@ -883,14 +998,9 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
      * wvalue = p_str[0][31] << 8 | p_str[0][30]
      * wvalue = (wvalue >> 4) & mask
      */
-
-
     idx = 255;
-    // wvalue = p_str[0][31]
-    wvalue = p_str[0][(idx - 1) / 8];
-    // (wvalue >> 6) & mask
-    wvalue = (wvalue >> ((idx - 1) % 8)) & mask;
-
+    wvalue = p_str[0][(idx - (256 % WINDOWS_SIZE_UNFIXED)) / 8];
+    wvalue = (wvalue >> ((idx - (256 % WINDOWS_SIZE_UNFIXED)) % 8)) & mask;
     /*
      * We gather to temp[0], because we know it's position relative
      * to table
@@ -900,12 +1010,12 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
     ecp_sm2z256_gather_w5(&temp[0], table[0], _booth_recode_w5(wvalue) >> 1);
     memcpy(r, &temp[0], sizeof(temp[0]));
 
-    while (idx >= 5) {
+    while (idx >= WINDOWS_SIZE_UNFIXED) {
         for (i = (idx == 255 ? 1 : 0); i < num; i++) {
-            unsigned int off = (idx - 1) / 8;
+            unsigned int off = (idx - (256 % WINDOWS_SIZE_UNFIXED)) / 8;
 
             wvalue = p_str[i][off] | p_str[i][off + 1] << 8;
-            wvalue = (wvalue >> ((idx - 1) % 8)) & mask;
+            wvalue = (wvalue >> ((idx - (256 % WINDOWS_SIZE_UNFIXED)) % 8)) & mask;
 
             wvalue = _booth_recode_w5(wvalue);
 
@@ -924,6 +1034,9 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
         ecp_sm2z256_point_double(r, r);
         ecp_sm2z256_point_double(r, r);
         ecp_sm2z256_point_double(r, r);
+        # if (WINDOWS_SIZE_UNFIXED == 6)
+        ecp_sm2z256_point_double(r, r);
+        #endif
     }
 
     /* Final window */
@@ -948,6 +1061,12 @@ __owur static int ecp_sm2z256_windowed_mul(const EC_GROUP *group,
     OPENSSL_free(scalars);
     return ret;
 }
+
+# if (WINDOWS_SIZE_UNFIXED == 6)
+# undef ecp_sm2z256_gather_w5
+# undef ecp_sm2z256_scatter_w5
+# undef _booth_recode_w5
+# endif
 
 /* Coordinates of G, for which we have precomputed tables */
 const static BN_ULONG def_xG[P256_LIMBS] = {
