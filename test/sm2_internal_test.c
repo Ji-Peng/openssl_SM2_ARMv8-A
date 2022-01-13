@@ -41,6 +41,13 @@ int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp,
 void ecp_sm2z256_mul_mont(BN_ULONG res[4],
                            const BN_ULONG a[4],
                            const BN_ULONG b[4]);
+
+void ecp_sm2z256_ord_mul_mont(BN_ULONG res[4],
+                           const BN_ULONG a[4],
+                           const BN_ULONG b[4]);
+
+void ecp_sm2z256_mod_inverse_sqr(BN_ULONG r[4],
+                                       const BN_ULONG in[4]);
 static fake_random_generate_cb get_faked_bytes;
 
 static OSSL_PROVIDER *fake_rand = NULL;
@@ -50,6 +57,9 @@ static size_t fake_rand_size = 0;
 
 #define TESTS 0x7fffff
 #define FUNCTION_TESTS 0x7fffffff
+
+// #define TESTS 0x1
+// #define FUNCTION_TESTS 0x1
 // copy frm aarch64-linux-gnu/bits/signum-generic.h
 #define	SIGALRM		14	/* Alarm clock.  */
 
@@ -466,6 +476,7 @@ static int speed_sm2_sign(const EC_GROUP *group,
     long int ok = 0, count;
     BIGNUM *priv = NULL;
     EC_POINT *pt = NULL;
+    EC_POINT *pt1 = NULL;
     EC_KEY *key = NULL;
     ECDSA_SIG *sig = NULL;
     BN_MONT_CTX *mont;
@@ -481,6 +492,7 @@ static int speed_sm2_sign(const EC_GROUP *group,
     // BIGNUM *r = NULL;
     // BIGNUM *s = NULL;
     BN_CTX *ctx = NULL;
+    int ret;
 
 
 #if SIGALRM > 0
@@ -518,19 +530,17 @@ static int speed_sm2_sign(const EC_GROUP *group,
             || !TEST_true(EC_KEY_set_public_key(key, pt)))
         goto done;
 
+    pt1 = EC_POINT_new(group);
+    if (!TEST_ptr(pt1)
+            || !TEST_true(EC_POINT_mul(group, pt1, priv, NULL, NULL, NULL))
+            || !TEST_true(EC_KEY_set_public_key(key, pt1)))
+        goto done;
+
     start_fake_rand(k_hex);
     run = 1;
 
 #if 1
-        // d = 0.0;
-        // bn_set_words(big_a, a, 4);
-        // Time_F(START);
-        // for(count = 0; run && (count < FUNCTION_TESTS); count++){
-        //     // group->meth->field_inv(group, big_r, big_a, ctx);
-        // }
-        // d = Time_F(STOP);
-        // BIO_printf(bio_err, "%ld invert in %.2fs \n", count, d);
-        // BIO_printf(bio_err, "%8.1f invert/s\n", (double)count / d);
+    bn_set_words(big_a, a, 4);
 
     if (test_functions == 1){
         d = 0.0;
@@ -551,12 +561,117 @@ static int speed_sm2_sign(const EC_GROUP *group,
         BIO_printf(bio_err, "%ld ecp_sm2z256_mul_mont in %.2fs \n", count, d);
         BIO_printf(bio_err, "%8.1f ecp_sm2z256_mul_mont/s\n", (double)count / d);
 
+        d = 0.0;
+        Time_F(START);
+        for(count = 0; run && (count < FUNCTION_TESTS); count++){
+            ecp_sm2z256_ord_mul_mont(res, a, b);
+        }
+        d = Time_F(STOP);
+        BIO_printf(bio_err, "%ld ecp_sm2z256_ord_mul_mont in %.2fs \n", count, d);
+        BIO_printf(bio_err, "%8.1f ecp_sm2z256_ord_mul_mont/s\n", (double)count / d);
 
+        /*
+        * for mod p inverse 
+        *
+        * without my sm2 impl:
+        * in ec_cvt.c:EC_GROUP_new_curve_GFp:meth = EC_GFp_mont_method()
+        * in ecp_mont.c:ossl_ec_GFp_mont_field_inv is mod p inverse
+        * ossl_ec_GFp_mont_field_inv:BN_mod_exp_mont:BN_mod_exp_mont_consttime
+        * this inv is used when calling 
+        * ecp_mont.c:ossl_ec_GFp_simple_point_get_affine_coordinates
+        * 
+        * with my sm2 impl:
+        * in ec_cvt.c:EC_GROUP_new_curve_sm2_GFp:
+        *  meth = EC_GFp_sm2z256_method()
+        * in ecp_sm2z256.c:ecp_sm2z256_get_affine calls my inv function
+        */
+        // ret = ossl_ec_GFp_mont_field_inv(group, big_r, big_a, ctx);
+        // BIO_printf(bio_err, "mod p inverse ret is %d\n", ret);
+        d = 0.0;
+        Time_F(START);
+        for(count = 0; run && (count < FUNCTION_TESTS); count++){
+            ossl_ec_GFp_mont_field_inv(group, big_r, big_a, ctx);
+        }
+        d = Time_F(STOP);
+        BIO_printf(bio_err, "%ld mod p default inv in %.2fs \n", count, d);
+        BIO_printf(bio_err, "%8.1f mod p default inv/s\n", (double)count / d);
 
+        d = 0.0;
+        Time_F(START);
+        for(count = 0; run && (count < FUNCTION_TESTS); count++){
+            ecp_sm2z256_mod_inverse_sqr(res, a);
+        }
+        d = Time_F(STOP);
+        BIO_printf(bio_err, "%ld mod p fast inv in %.2fs \n", count, d);
+        BIO_printf(bio_err, "%8.1f mod p fast inv/s\n", (double)count / d);
 
         test_functions = 0;
     }
+    
+    /*
+    * for mod n inverse
+    *
+    * in sm2_sign.c:sm2_sig_gen:ossl_ec_group_do_inverse_ord is 
+    * mod n inverse
+    * 
+    * it is implemented in ec_lib.c
+    * it will call my ecp_sm2z256_inv_mod_ord with my sm2 impl.
+    *   or call default ec_field_inverse_mod_ord:BN_mod_exp_mont:
+    *      BN_mod_exp_mont_consttime without my sm2 impl.
+    */
+    // ret = ossl_ec_group_do_inverse_ord(group, big_r, big_a, ctx);
+    // BIO_printf(bio_err, "mod n inverse ret is %d\n", ret);
+    d = 0.0;
+    Time_F(START);
+    for(count = 0; run && (count < TESTS); count++){
+        ossl_ec_group_do_inverse_ord(group, big_r, big_a, ctx);
+    }
+    d = Time_F(STOP);
+    BIO_printf(bio_err, "%ld mod n inv in %.2fs \n", count, d);
+    BIO_printf(bio_err, "%8.1f mod n inv/s\n", (double)count / d);
 
+    /*
+    * for point mul
+    *
+    * in sm2_sign.c:EC_POINT_mul
+    * without my sm2 impl:
+    * in ec_lib.c:EC_POINT_mul:ossl_ec_wNAF_mul is used
+    * (in ecp_mont.c meth->mul is set 0)
+    * ossl_ec_wNAF_mul is implemented in ec_mult.c
+    * 
+    * ossl_ec_wNAF_mul:
+    * scalar!=NULL && num==0: scalar*GeneratorPoint using ladder
+    * scalar==NULL && num==1: scalar*VariablePoint using ladder
+    * 
+    * if group->order==0 or group->cofactor==0:
+    *   maybe use wNAF
+    * 
+    * with my sm2 impl:
+    * EC_POINT_mul:group->meth->mul:ecp_sm2z256_points_mul
+    * 
+    * scalar!=NULL: w=7 windows-based method with too-big pre-computed table
+    * else: call ecp_sm2z256_windowed_mul (w=5 unfixed-point mul)
+    */
+    // ret = EC_POINT_mul(group, pt, priv, NULL, NULL, NULL);
+    // BIO_printf(bio_err, "EC_POINT_mul is %d\n", ret);
+    d = 0.0;
+    Time_F(START);
+    for(count = 0; run && (count < TESTS); count++){
+        EC_POINT_mul(group, pt, priv, NULL, NULL, NULL);
+    }
+    d = Time_F(STOP);
+    BIO_printf(bio_err, "%ld fixed-point mul in %.2fs \n", count, d);
+    BIO_printf(bio_err, "%8.1f fixed-point mul/s\n", (double)count / d);
+
+    // for unfixed-point mul
+    d = 0.0;
+    Time_F(START);
+    for(count = 0; run && (count < TESTS); count++){
+        EC_POINT_mul(group, pt1, NULL, pt, priv, ctx);
+    }
+    d = Time_F(STOP);
+    BIO_printf(bio_err, "%ld unfixed-point mul in %.2fs \n", count, d);
+    BIO_printf(bio_err, "%8.1f unfixed-point mul/s\n", (double)count / d);
 #endif
 
     d = 0.0;

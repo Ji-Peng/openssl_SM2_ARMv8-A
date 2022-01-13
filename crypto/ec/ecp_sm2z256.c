@@ -142,6 +142,18 @@ static SM2Z256_PRE_COMP *ecp_sm2z256_pre_comp_new(const EC_GROUP *group);
 extern const PRECOMP256_ROW ecp_sm2z256_precomputed[37];
 
 /* Recode window to a signed digit, see ecp_nistputil.c for details */
+static unsigned int _booth_recode_w4(unsigned int in)
+{
+    unsigned int s, d;
+
+    s = ~((in >> 4) - 1);
+    d = (1 << 5) - in - 1;
+    d = (d & s) | (in & ~s);
+    d = (d >> 1) + (d & 1);
+
+    return (d << 1) + (s & 1);
+}
+
 static unsigned int _booth_recode_w5(unsigned int in)
 {
     unsigned int s, d;
@@ -650,7 +662,7 @@ static void ecp_sm2z256_mod_inverse(BN_ULONG r[P256_LIMBS],
 /* r = in^-2 = in^(q-3) mod p
  * See: https://briansmith.org/ecc-inversion-addition-chains-01#p256_scalar_inversion
  */
-static void ecp_sm2z256_mod_inverse_sqr(BN_ULONG r[P256_LIMBS],
+void ecp_sm2z256_mod_inverse_sqr(BN_ULONG r[P256_LIMBS],
                                        const BN_ULONG in[P256_LIMBS])
 {
     BN_ULONG xtp[P256_LIMBS];
@@ -1236,6 +1248,94 @@ __owur static int ecp_sm2z256_set_from_affine(EC_POINT *out, const EC_GROUP *gro
     return ret;
 }
 
+/**
+ * @brief computing scalar1*G + scalar2*P，w=4
+ * 
+ * @param group including computing function and parameters of SM2
+ * @param r result point
+ * @param scalar1 the scalar of base point G
+ * @param point2 another point namely P
+ * @param scalar2 the scalar of unfixed point P
+ * @param ctx context of big number computing
+ */
+__owur static int ecp_sm2z256_multi_points_mul(const EC_GROUP *group,
+                                                EC_POINT *r,
+                                                const BIGNUM *scalar1,
+                                                const EC_POINT *point2,
+                                                const BIGNUM *scalar2,
+                                                BN_CTX *ctx)
+{
+    int i = 0, ret = 0;
+    // char version of the scalar1 and scalar2
+    unsigned char s1_str[33] = {0};
+    unsigned char s2_str[33] = {0};
+    // we used our hardcoded table
+    const PRECOMP256_ROW *preComputedTable = ecp_sm2z256_precomputed;
+    const EC_POINT *generator = NULL;
+    unsigned int idx = 0;
+    const unsigned int windows_size = 4;
+    const unsigned int mask = (1 << (windows_size + 1)) - 1;
+    unsigned int wvalue;
+    BN_ULONG infty;
+    ALIGN32 union {
+        P256_POINT p;           // including X Y Z
+        P256_POINT_AFFINE a;    // including X Y
+    } t, p;
+    // for pre-computed table
+    P256_POINT table[16];
+    P256_POINT temp[3];
+
+    generator = EC_GROUP_get0_generator(group);
+
+    for (i = 0; i < bn_get_top(scalar1) * BN_BYTES; i += BN_BYTES) {
+        // i-th word of scalar1 and scalar2
+        BN_ULONG d1 = bn_get_words(scalar1)[i / BN_BYTES];
+        BN_ULONG d2 = bn_get_words(scalar2)[i / BN_BYTES];
+        // for scalar1
+        s1_str[i + 0] = (unsigned char)d1;
+        s1_str[i + 1] = (unsigned char)(d1 >> 8);
+        s1_str[i + 2] = (unsigned char)(d1 >> 16);
+        s1_str[i + 3] = (unsigned char)(d1 >>= 24);
+        // for scalar2
+        s2_str[i + 0] = (unsigned char)d2;
+        s2_str[i + 1] = (unsigned char)(d2 >> 8);
+        s2_str[i + 2] = (unsigned char)(d2 >> 16);
+        s2_str[i + 3] = (unsigned char)(d2 >>= 24);
+        if (BN_BYTES == 8) {
+            d1 >>= 8;
+            d2 >>= 8;
+            s1_str[i + 4] = (unsigned char)d1;
+            s1_str[i + 5] = (unsigned char)(d1 >> 8);
+            s1_str[i + 6] = (unsigned char)(d1 >> 16);
+            s1_str[i + 7] = (unsigned char)(d1 >> 24);
+            s2_str[i + 4] = (unsigned char)d2;
+            s2_str[i + 5] = (unsigned char)(d2 >> 8);
+            s2_str[i + 6] = (unsigned char)(d2 >> 16);
+            s2_str[i + 7] = (unsigned char)(d2 >> 24);
+        }
+    }
+    for (; i < 33; i++) {
+        s1_str[i] = 0;
+        s2_str[i] = 0;
+    }
+
+    if (!ecp_sm2z256_bignum_to_field_elem(temp[0].X, point2->X)
+        || !ecp_sm2z256_bignum_to_field_elem(temp[0].Y, point2->Y)
+        || !ecp_sm2z256_bignum_to_field_elem(temp[0].Z, point2->Z)) {
+        ERR_raise(ERR_LIB_EC, EC_R_COORDINATES_OUT_OF_RANGE);
+        goto err;
+    }
+
+    /**
+     * Now, we want to pre-compute jG+kQ for j, k in [1, 8]
+     * jG+kQ is stored into table[i*8]
+     * 
+     */
+
+err:
+    return ret;
+}
+
 /* num=0, points=NULL, scalars=NULL when computing scalar*G */
 /**
  * @brief r = scalar*G + sum(scalars[i]*points[i])
@@ -1340,6 +1440,15 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
                 }
                 scalar = tmp_scalar;
             }
+            /**
+             * Here, if num == 1, we call our multi-point scalar mul function,
+             * set ret, and goto err label
+             */
+
+            // if (!ecp_sm2z256_multi_points_mul(group, r, scalar, points[0], scalars[0], ctx)){
+            //     goto err;
+            // }
+
             // for sm2, bn_get_top(scalar) returns 4, BN_BYTES = 8 on 64-bit machine
             // 256-bit scalar == 4 * 8 Bytes == 4 * BN_BYTES Bytes == 32 Bytes
             // i = 0, 8, 16, 24
@@ -1424,7 +1533,9 @@ __owur static int ecp_sm2z256_points_mul(const EC_GROUP *group,
         }
     } else
         p_is_infinity = 1;
-    // 对于固定点算法来说，不走该分支
+
+    // 对于固定点算法 且 没有预计算表的情况下走该分支
+    // 将标量和点放到new_scalars 和 new_points数组里
     if (no_precomp_for_generator) {
         /*
          * Without a precomputed table for the generator, it has to be
@@ -1655,6 +1766,11 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
         goto err;
     }
 #if 0
+    /**
+     * overhead:
+     * mul: 1+8+10+32-3+1=49
+     * dbl: 8+124+128=260
+     */
     BN_ULONG table[15][P256_LIMBS];
     BN_ULONG t2[P256_LIMBS];
     // trans to mont field
@@ -1709,6 +1825,11 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
             ecp_sm2z256_ord_mul_mont(out, out, table[expLo[i]-1]);
     }
 #else
+    /**
+     * Overhead:
+     * mul: 1+16+25+1=43
+     * dbl: 57+192=249
+     */
     BN_ULONG table[11][P256_LIMBS];
     enum {
         i_1 = 0, i_11,     i_101, i_111, i_1001, i_1011, i_1111,
@@ -1775,7 +1896,7 @@ static int ecp_sm2z256_inv_mod_ord(const EC_GROUP *group, BIGNUM *r,
     ecp_sm2z256_ord_mul_mont(out, out, table[i_x32]);
 
     for (i = 0; i < 25; i++) {
-        static const struct { unsigned char p, i; } chain[27] = {
+        static const struct { unsigned char p, i; } chain[25] = {
             { 32, i_x32 }, { 32, i_x32    }, { 4,  i_111    },
             { 3,  i_1   }, { 11, i_1111   }, { 5,  i_1111   },
             { 4,  i_1011}, { 5,  i_1011   }, { 3,  i_1      },

@@ -1580,13 +1580,15 @@ ecp_sm2z256_ord_mul_mont:
 	mul		$acc3,$a3,$bi		// a[3]*b[0]
 	umulh	$acc4,$a3,$bi
 
-	mul		$t4,$acc0,$ordk
+	mul		$t4,$acc0,$ordk		// $t4=m=$acc0*ord' mod 2^64
 
 	adds	$acc1,$acc1,$t0		// accumulate high parts of multiplication
 	adcs	$acc2,$acc2,$t1
 	adcs	$acc3,$acc3,$t2
 	adc		$acc4,$acc4,xzr
 	mov		$acc5,xzr
+
+	// now {$acc5,$acc4,$acc3,$acc2,$acc1,$acc0} is the accumulated result
 ___
 for ($i=1;$i<4;$i++) {
 	################################################################
@@ -1603,30 +1605,30 @@ for ($i=1;$i<4;$i++) {
 $code.=<<___;
 	ldr		$bi,[$bp,#8*$i]		// b[i]
 
-	lsl		$t0,$t4,#32
-	subs	$acc2,$acc2,$t4
-	lsr		$t1,$t4,#32
-	sbcs	$acc3,$acc3,$t0
-	sbcs	$acc4,$acc4,$t1
-	sbc		$acc5,$acc5,xzr
+	lsl		$t0,$t4,#32			// $t0=$t4<<32
+	subs	$acc2,$acc2,$t4		// $acc2=$acc2-m
+	lsr		$t1,$t4,#32			// $t1=$t4>>32
+	sbcs	$acc3,$acc3,$t0		// $acc3=$acc3-(m<<32)
+	sbcs	$acc4,$acc4,$t1		// $acc4=$acc4-(m>>32)
+	sbc		$acc5,$acc5,xzr		// $acc5-=borrow
 
-	subs	xzr,$acc0,#1
-	umulh	$t1,$ord0,$t4		// high(ord0*m)
-	mul		$t2,$ord1,$t4		// low(ord1*m)
-	umulh	$t3,$ord1,$t4		// high(ord1*m)
+	subs	xzr,$acc0,#1		// $acc0-1 and set flag
+	umulh	$t1,$ord0,$t4		// $t1=high(ord0*m)
+	mul		$t2,$ord1,$t4		// $t2=low(ord1*m)
+	umulh	$t3,$ord1,$t4		// $t3=high(ord1*m)
 
-	adcs	$t2,$t2,$t1
-	 mul	$t0,$a0,$bi
-	adc		$t3,$t3,xzr
-	 mul	$t1,$a1,$bi
+	adcs	$t2,$t2,$t1			// $t2=$t2+$t1+carry
+	 mul	$t0,$a0,$bi			// $t0=low($a0*$bi)
+	adc		$t3,$t3,xzr			// $t3=$t3+carry
+	 mul	$t1,$a1,$bi			// $t1=low($a1*$bi)
 
-	adds	$acc0,$acc1,$t2
-	 mul	$t2,$a2,$bi
-	adcs	$acc1,$acc2,$t3
-	 mul	$t3,$a3,$bi
-	adcs	$acc2,$acc3,xzr
-	adcs	$acc3,$acc4,$t4
-	adc		$acc4,$acc5,xzr
+	adds	$acc0,$acc1,$t2		// $acc0=$acc1+$t2
+	 mul	$t2,$a2,$bi			// $t2=$a2*$bi
+	adcs	$acc1,$acc2,$t3		// $acc1=$acc2+$t3
+	 mul	$t3,$a3,$bi			// $t3=low($a3*$bi)
+	adcs	$acc2,$acc3,xzr		// $acc2=$acc3+carry
+	adcs	$acc3,$acc4,$t4		// $acc3=$acc4+$t4
+	adc		$acc4,$acc5,xzr		// $acc4=$acc5+carry
 
 	adds	$acc0,$acc0,$t0		// accumulate low parts
 	umulh	$t0,$a0,$bi
