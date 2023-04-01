@@ -1,8 +1,12 @@
 Welcome to the OpenSSL Project
 ==============================
 
-Test SM2: make && ./test/sm2_internal_test
-
+Test SM2: 
+```bash
+./Configure --prefix=/usr/local/ssl --openssldir=/usr/local/ssl '-Wl,-rpath,$(LIBRPATH)'
+make -j4
+./test/sm2_internal_test
+```
 [![openssl logo]][www.openssl.org]
 
 [![github actions ci badge]][github actions ci]
